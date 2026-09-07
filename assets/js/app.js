@@ -1939,7 +1939,7 @@ function buildRecentFormSection(name){
 
 function buildDevAreasSection(name){
   const notes = devAreasState.filter(a => a.player === name);
-  let html = `<div class="section-heading" style="margin-top:14px;">🎯 Development Areas</div>`;
+  let html = `<div id="devAreasSectionWrap"><div class="section-heading" style="margin-top:14px;">🎯 Development Areas</div>`;
   html += `<div class="section-sub">Freeform notes on what ${name} is working on — anyone can add one.</div>`;
   if(notes.length === 0){
     html += `<div class="section-sub">Nothing added yet.</div>`;
@@ -1957,7 +1957,7 @@ function buildDevAreasSection(name){
     <div class="fg-row"><textarea id="devAreaInput" class="fg-select" rows="2" placeholder="e.g. Second serve consistency, moving forward to the net sooner..." style="width:100%; resize:vertical;"></textarea></div>
     <div class="fg-row"><button class="preset-btn" id="devAreaSubmit" style="width:100%;">Add development area</button></div>
     <div id="devAreaMessage" class="section-sub"></div>
-  </div>`;
+  </div></div>`;
   return html;
 }
 

@@ -994,6 +994,267 @@ function showFullMonthlyReview(){
   backBtn.style.display = 'block';
 }
 
+// ==========================================================================
+// PLAYER PROFILE -- premium dossier redesign
+// Reuses every existing calculation (PLAYERS fields, BEST_PARTNER, H2H,
+// WITHIN_TIER_GAMES/BOUNDARY_TESTS/CALIBRATION_GAMES, computePlayerJourney,
+// buildJourneyChartSvg, computeRecentForm) -- no parallel rating/stat logic.
+// Strategy: let the legacy openSheet() run fully first (unchanged), which
+// still does all data prep AND wires every interactive element (match
+// edit/delete, dev-area add/delete). Then physically restructure the DOM --
+// reparenting the still-live dev-areas block and match cards rather than
+// rebuilding their innerHTML, which would destroy those event listeners.
+// ==========================================================================
+
+// One relevant "prove it" matchup for this player -- same three sources
+// buildCallOutSection already draws from.
+function getMatchToProveIt(name){
+  const relevant = [];
+  WITHIN_TIER_GAMES.forEach(c=>{ if(c.a===name || c.b===name) relevant.push(c.matchup); });
+  BOUNDARY_TESTS.forEach(c=>{ if(c.a===name || c.b===name) relevant.push(c.matchup); });
+  CALIBRATION_GAMES.forEach(c=>{ if(c.name===name) relevant.push(c.matchup); });
+  return relevant[0] || null;
+}
+
+// Direct win/loss count between two specific players as opponents -- a
+// simple filter over existing match data, not a new rating calculation.
+// Used only for the viewer-relative module (item 9 of the brief).
+function getHeadToHeadRecord(a, b){
+  let aWins = 0, bWins = 0;
+  MATCHES.forEach(m=>{
+    if(m.winners.includes(a) && m.losers.includes(b)) aWins++;
+    else if(m.winners.includes(b) && m.losers.includes(a)) bWins++;
+  });
+  return { aWins, bWins, total: aWins + bWins };
+}
+
+function tierRankNeighbors(name){
+  const target = PLAYERS.find(p=>p.name===name);
+  if(!target) return { above: null, below: null };
+  const pool = PLAYERS.filter(p => p.active || p.name === name).sort((a,b)=> b.rating - a.rating);
+  const idx = pool.findIndex(p=>p.name===name);
+  if(idx === -1) return { above: null, below: null };
+  return {
+    above: idx > 0 ? pool[idx-1] : null,
+    below: idx < pool.length-1 ? pool[idx+1] : null,
+  };
+}
+
+function renderPremiumProfile(name, matchFilter){
+  const p = PLAYERS.find(x=>x.name===name);
+  if(!p) return;
+  const snap = getViewerSnapshot(name);
+  const viewer = getCurrentViewer();
+  const isOwnProfile = viewer && viewer.name === name;
+  const riskInfo = RISK_LABELS[p.risk] || RISK_LABELS.stable;
+
+  const sheet = document.getElementById('sheetProfile').parentElement; // .sheet container
+  let wrap = document.getElementById('premiumProfileWrap');
+  if(wrap) wrap.remove(); // fully rebuilt each open/refresh, except the reparented live nodes below
+
+  // ---- Hero ----
+  const heroHtml = `
+    <div class="pp-hero">
+      <div class="pp-hero-name">${name}</div>
+      <div class="pp-hero-status">TIER ${p.tier} · ${riskInfo.text.toUpperCase()}</div>
+      <div class="pp-hero-rating">${Math.round(p.rating)}</div>
+      <div class="pp-hero-rating-label">Power Rating</div>
+      <div class="pp-hero-sub">${snap.tierRank ? `#${snap.tierRank} Tier` : 'Unranked'} · ${snap.overallRank ? `#${snap.overallRank} Overall` : 'Not currently ranked'} · ${p.winpct}% Win Rate</div>
+    </div>
+  `;
+
+  // ---- Recent form (real chronological sequence, same source as Home) ----
+  const seq = computeRecentFormSequence(name, 10);
+  const formHtml = snap.recentForm ? `
+    <div class="pp-section">
+      <div class="pp-form-seq">${seq.map(w=>`<span class="pp-form-letter ${w?'w':'l'}">${w?'W':'L'}</span>`).join('')}</div>
+      <div class="pp-form-record">${snap.recentForm.wins}–${snap.recentForm.losses} · Last ${snap.recentForm.games}</div>
+      <div class="pp-form-clutch section-sub">${p.avg_overperf_pct>=0?'+':''}${p.avg_overperf_pct}% vs expectation</div>
+    </div>
+  ` : '';
+
+  // ---- Player analysis: 3 cards from existing precomputed fields ----
+  const posNote = Math.abs(p.rating_vs_tier_avg) < 15
+    ? `Right at tier average`
+    : (p.rating_vs_tier_avg > 0 ? `${Math.round(p.rating_vs_tier_avg)} pts above tier average` : `${Math.round(Math.abs(p.rating_vs_tier_avg))} pts below tier average`);
+  const schedNote = Math.abs(p.opp_vs_tier_avg) < 20
+    ? `Average opposition for the tier`
+    : (p.opp_vs_tier_avg > 0 ? `Tough opposition` : `Easier opposition`);
+  const perfNote = p.avg_overperf_pct > 3 ? 'Overperforming expectation' : (p.avg_overperf_pct < -3 ? 'Slight underperformance' : 'Tracking expectation closely');
+
+  const analysisHtml = `
+    <div class="pp-section">
+      <div class="pp-section-label">Player Analysis</div>
+      <div class="pp-analysis-grid">
+        <div class="pp-analysis-card">
+          <div class="pp-ac-label">Position</div>
+          <div class="pp-ac-main">#${p.tier_rank} of ${p.tier_size} in Tier ${p.tier}</div>
+          <div class="pp-ac-sub">${posNote}</div>
+        </div>
+        <div class="pp-analysis-card">
+          <div class="pp-ac-label">Schedule</div>
+          <div class="pp-ac-main">${schedNote}</div>
+          <div class="pp-ac-sub">${p.opp_vs_tier_avg>=0?'+':''}${p.opp_vs_tier_avg} vs tier average</div>
+        </div>
+        <div class="pp-analysis-card">
+          <div class="pp-ac-label">Performance</div>
+          <div class="pp-ac-main">${p.avg_overperf_pct>=0?'+':''}${p.avg_overperf_pct}% vs expectation</div>
+          <div class="pp-ac-sub">${perfNote}</div>
+        </div>
+      </div>
+      <div class="pp-summary-sentence">${schedNote}, ${perfNote.toLowerCase()}, ${riskInfo.text.toLowerCase()} in Tier ${p.tier}.</div>
+      <button class="explainer-toggle" id="ppFullAnalysisToggle" style="padding-left:0;">Full analysis ›</button>
+      <div class="section-sub" id="ppFullAnalysisBody" style="display:none;">${buildProfileText(p)}</div>
+    </div>
+  `;
+
+  // ---- Partnerships & rivals ----
+  const neighbors = tierRankNeighbors(name);
+  const rivalsHtml = `
+    <div class="pp-section">
+      <div class="pp-section-label">Partnerships &amp; Rivals</div>
+      ${snap.bestPartner ? `
+        <div class="pp-partner-card">
+          <div class="pp-ac-label">Best Partner</div>
+          <div class="pp-ac-main">${snap.bestPartner.partner}</div>
+          <div class="pp-ac-sub">${snap.bestPartner.winpct}% together · Chemistry ${snap.bestPartner.avg_overperf>=0?'+':''}${snap.bestPartner.avg_overperf}%</div>
+        </div>
+      ` : ''}
+      <div class="pp-rivals-card">
+        <div class="pp-ac-label">Ranking Rivals</div>
+        ${neighbors.above ? `<div class="pp-rival-row">↑ <b>${neighbors.above.name}</b> · ${Math.round(neighbors.above.rating - p.rating)} pts</div>` : `<div class="pp-rival-row section-sub">↑ Top of the board</div>`}
+        <div class="pp-rival-self">${name}</div>
+        ${neighbors.below ? `<div class="pp-rival-row">↓ <b>${neighbors.below.name}</b> · ${Math.round(p.rating - neighbors.below.rating)} pts</div>` : `<div class="pp-rival-row section-sub">↓ Bottom of the board</div>`}
+      </div>
+    </div>
+  `;
+
+  // ---- Match to prove it ----
+  const matchup = getMatchToProveIt(name);
+  const proveItHtml = matchup ? `
+    <div class="pp-section">
+      <div class="pp-section-label">Match to Prove It</div>
+      <div class="pp-proveit-card">
+        <div class="pp-proveit-team">${matchup.team1[0]} + ${matchup.team1[1]}</div>
+        <div class="pp-proveit-vs">VS</div>
+        <div class="pp-proveit-team">${matchup.team2[0]} + ${matchup.team2[1]}</div>
+        <div class="section-sub" style="margin-top:8px;">A matchup that could help settle ${name}'s position in the rankings.</div>
+        <button class="mp-btn-primary" id="ppProveItBtn" style="width:100%; margin-top:10px;">Find This Game ›</button>
+      </div>
+    </div>
+  ` : '';
+
+  // ---- Rating journey (compact headline; chart reused verbatim) ----
+  const journey = computePlayerJourney(name);
+  let journeyHtml = '';
+  if(journey && journey.length > 1){
+    const start = Math.round(journey[0].rating), end = Math.round(journey[journey.length-1].rating);
+    const diff = end - start;
+    const diffClass = diff > 0 ? 'perf-pos' : (diff < 0 ? 'perf-neg' : '');
+    journeyHtml = `
+      <div class="pp-section">
+        <div class="pp-section-label">Rating Journey</div>
+        <div class="pp-journey-headline">${start} → ${end} <span class="${diffClass}" style="font-size:14px;">(${diff>=0?'+':''}${diff} pts)</span></div>
+        <div class="matchup-vs" style="padding:8px;">${buildJourneyChartSvg(journey)}</div>
+        <button class="explainer-toggle" id="ppJourneyInfoToggle" style="padding-left:0;">How ratings work ›</button>
+        <div class="section-sub" id="ppJourneyInfoBody" style="display:none;">This is a readable breakdown of your results, not the official calculation — the real rating is solved jointly across everyone's games at once, so this total won't always land exactly on the Power Rating shown above, but the direction and shape of the trend will match your actual results.</div>
+      </div>
+    `;
+  }
+
+  // ---- Viewer-relative module (item 9) ----
+  let viewerRelativeHtml = '';
+  if(viewer && !isOwnProfile){
+    const h2h = getHeadToHeadRecord(viewer.name, name);
+    const partnership = PARTNERSHIPS.find(pr => pr.pair.includes(viewer.name) && pr.pair.includes(name));
+    const ratingDiff = Math.round(viewer.rating - p.rating);
+    viewerRelativeHtml = `
+      <div class="pp-section">
+        <div class="pp-section-label">You vs ${name}</div>
+        <div class="pp-viewer-rel-grid">
+          <div class="pp-analysis-card"><div class="pp-ac-label">Head to Head</div><div class="pp-ac-main">${h2h.total ? `${h2h.aWins}–${h2h.bWins}` : 'Never played'}</div></div>
+          <div class="pp-analysis-card"><div class="pp-ac-label">Rating Gap</div><div class="pp-ac-main">${ratingDiff>=0?'+':''}${ratingDiff}</div></div>
+          ${partnership ? `<div class="pp-analysis-card"><div class="pp-ac-label">Together</div><div class="pp-ac-main">${partnership.games} games</div></div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+  const heroLabelHtml = isOwnProfile
+    ? `<div class="pp-viewer-tag">Your Profile</div>`
+    : (viewer ? `<div class="pp-viewer-tag">Player Profile</div>` : '');
+
+  // ---- Assemble the new wrapper, insert before the legacy content ----
+  wrap = document.createElement('div');
+  wrap.id = 'premiumProfileWrap';
+  wrap.innerHTML = heroLabelHtml + heroHtml + formHtml + analysisHtml + rivalsHtml + proveItHtml + journeyHtml + viewerRelativeHtml
+    + `<div class="pp-section"><div class="pp-section-label">Recent Results</div><div id="ppMatchesHost"></div></div>`
+    + `<div class="pp-section" id="ppDevAreasHost"></div>`;
+
+  const sheetProfileEl = document.getElementById('sheetProfile');
+  sheetProfileEl.parentNode.insertBefore(wrap, sheetProfileEl);
+
+  // Hide (not delete) the legacy prose/section blocks -- their data has been
+  // reused above; the dev-areas block and match cards are reparented instead
+  // of hidden, since those still carry live Firestore-write event listeners.
+  sheetProfileEl.style.display = 'none';
+
+  const devWrap = document.getElementById('devAreasSectionWrap');
+  if(devWrap) document.getElementById('ppDevAreasHost').appendChild(devWrap);
+
+  // Reparent each existing match card into a collapsed-by-default row --
+  // wrapping, not rebuilding, so edit/delete listeners already attached to
+  // these exact nodes keep working untouched.
+  const matchesHost = document.getElementById('ppMatchesHost');
+  const matchEls = [...document.querySelectorAll('#sheetMatches .match')];
+  matchEls.forEach(matchEl=>{
+    const won = matchEl.querySelector('.top span:last-child')?.textContent === 'WIN';
+    const dateText = matchEl.querySelector('.top span:first-child')?.textContent || '';
+    const teamsText = matchEl.querySelector('.teams')?.textContent || '';
+    const scoreText = matchEl.querySelector('.score')?.textContent || '';
+    const parts = teamsText.split(' vs ');
+    const summaryRow = document.createElement('div');
+    summaryRow.className = 'pp-match-row';
+    summaryRow.innerHTML = `
+      <div class="pp-match-summary">
+        <span class="pp-match-result ${won?'w':'l'}">${won?'WIN':'LOSS'}</span>
+        <span class="pp-match-date">${dateText}</span>
+        <span class="pp-match-teams">${parts[0]||''}</span>
+        <span class="pp-match-score">${scoreText.split(' · ')[0]||''}</span>
+        <span class="pp-match-opp">${parts[1]||''}</span>
+        <span class="pp-match-chev">›</span>
+      </div>
+    `;
+    matchesHost.appendChild(summaryRow);
+    matchEl.classList.add('pp-match-detail');
+    matchesHost.appendChild(matchEl); // reparented, listeners intact
+    summaryRow.onclick = ()=>{
+      const open = matchEl.style.display === 'block';
+      matchEl.style.display = open ? 'none' : 'block';
+      summaryRow.querySelector('.pp-match-chev').textContent = open ? '›' : '⌄';
+    };
+  });
+  const banner = document.querySelector('#sheetMatches > .section-sub');
+  if(banner) matchesHost.insertBefore(banner, matchesHost.firstChild);
+
+  // Wire the new toggles and CTA
+  const fa = document.getElementById('ppFullAnalysisToggle');
+  if(fa) fa.onclick = ()=>{
+    const body = document.getElementById('ppFullAnalysisBody');
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    fa.textContent = open ? 'Full analysis ›' : 'Full analysis ⌄';
+  };
+  const ji = document.getElementById('ppJourneyInfoToggle');
+  if(ji) ji.onclick = ()=>{
+    const body = document.getElementById('ppJourneyInfoBody');
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    ji.textContent = open ? 'How ratings work ›' : 'How ratings work ⌄';
+  };
+  const piBtn = document.getElementById('ppProveItBtn');
+  if(piBtn) piBtn.onclick = ()=>{ closeSheet(); goToSection('play'); };
+}
+
 document.addEventListener('DOMContentLoaded', ()=>{
   buildShellDom();
   const hero = buildRankingsHero();
@@ -1022,6 +1283,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
       viewerInitDone = true;
       buildMyPlayerMoreItem();
       buildHomeDashboard();
+      // Wrap openSheet once PLAYERS/etc are guaranteed ready -- every internal
+      // call site in app.js (after edit/delete/confirm) goes through this
+      // same global function, so they all pick up the premium restructuring
+      // automatically without touching those call sites.
+      const _originalOpenSheet = window.openSheet;
+      window.openSheet = function(name, matchFilter){
+        _originalOpenSheet.apply(this, arguments);
+        renderPremiumProfile(name, matchFilter);
+      };
       if(!getCurrentViewer()) buildViewerSelector();
       // If Home is already the active section by the time data is ready (or
       // becomes active later), keep the dashboard in sync with the viewer.
