@@ -887,7 +887,10 @@ function renderHomeDashboard(){
       <div class="home-card-header"><span>Your Game</span><button class="home-card-link" id="homeViewProfileBtn">View Profile ›</button></div>
       <div class="home-yourgame-group">
         <span class="tier-badge tier-${viewer.tier.toLowerCase()}" style="width:32px;height:32px;font-size:14px;">${viewer.tier}</span>
-        <div class="home-tier-sub">#${snap.tierRank||'–'} in Tier ${viewer.tier} · #${snap.overallRank||'–'} Overall</div>
+        <div class="home-tier-sub">${snap.eligible
+          ? `#${snap.tierRank||'–'} in Tier ${viewer.tier} · #${snap.overallRank||'–'} Overall`
+          : `Tier ${viewer.tier} · <span class="inactive-tag">Inactive</span>`
+        }</div>
       </div>
       <div class="home-yourgame-divider"></div>
       <div class="home-yourgame-group home-yourgame-rating">

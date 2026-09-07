@@ -805,13 +805,13 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
    a rectangular photo card. No border/radius -- it's meant to feel like part
    of the page, not a framed image. */
 .home-hero{
-  position: relative; min-height: 340px; box-sizing: border-box;
-  padding: var(--space-5) var(--space-4) var(--space-4);
+  position: relative; min-height: 280px; box-sizing: border-box;
+  padding: var(--space-5) var(--space-4) var(--space-3);
   display: flex; flex-direction: column; justify-content: center;
   background:
     linear-gradient(90deg, rgba(10,10,9,0.88) 0%, rgba(10,10,9,0.55) 45%, rgba(10,10,9,0.08) 72%, transparent 100%),
-    linear-gradient(180deg, rgba(10,10,9,0.05) 0%, rgba(10,10,9,0.35) 60%, var(--surface-0) 100%),
-    url("../home/home-hero-padel.png") right 38% / cover no-repeat,
+    linear-gradient(180deg, rgba(10,10,9,0.05) 0%, rgba(10,10,9,0.3) 50%, var(--surface-0) 82%, var(--surface-0) 100%),
+    url("../home/home-hero-padel.png") right 42% / cover no-repeat,
     var(--surface-0);
 }
 .home-greeting{ font-size: 28px; line-height: 1.2; margin-top: 6px; }
