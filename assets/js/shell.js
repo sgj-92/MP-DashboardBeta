@@ -895,12 +895,14 @@ function renderHomeDashboard(){
         <div class="home-rating-num">${Math.round(viewer.rating)}</div>
       </div>
       <div class="home-yourgame-divider"></div>
-      <div class="home-yourgame-group">
-        <div class="section-sub" style="font-size:10px;">Recent Form <span style="opacity:0.7;">(last ${snap.recentForm ? snap.recentForm.games : 0})</span></div>
-        <div class="home-form-dots">${snap.recentForm ? computeRecentFormSequence(viewer.name, 10).map(isWin=>
-          `<span class="form-dot ${isWin?'w':'l'}"></span>`
-        ).join('') : '—'}</div>
-        <div class="section-sub" style="font-size:10.5px; margin-top:4px;">${snap.recentForm ? `${snap.recentForm.wins}W – ${snap.recentForm.losses}L this window` : 'Not enough recent games'}</div>
+      <div class="home-yourgame-group home-yourgame-form">
+        <div class="section-sub" style="font-size:10px;">Recent Form · Last ${snap.recentForm ? snap.recentForm.games : 0}</div>
+        <div class="home-form-row">
+          <div class="home-form-dots">${snap.recentForm ? computeRecentFormSequence(viewer.name, 10).map(isWin=>
+            `<span class="form-dot ${isWin?'w':'l'}"></span>`
+          ).join('') : '—'}</div>
+          <div class="home-form-record">${snap.recentForm ? `${snap.recentForm.wins}W – ${snap.recentForm.losses}L` : 'Not enough recent games'}</div>
+        </div>
       </div>
       <div class="home-insight">${insight}</div>
     </div>

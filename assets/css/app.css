@@ -798,11 +798,21 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
    strategy already used for the Rankings hero image, for consistency.
    Once the asset exists: add `url("../home/home-hero.webp") top right/cover
    no-repeat` as the last layer of the background shorthand below. */
+/* Hero -- production artwork from ChatGPT. Composition is dark-left/warm-
+   right by design, so two overlay gradients stack: a left-to-right darkening
+   for greeting readability (fades out before the racket/ball), and a
+   top/bottom fade so the image blends into the page rather than reading as
+   a rectangular photo card. No border/radius -- it's meant to feel like part
+   of the page, not a framed image. */
 .home-hero{
-  min-height: 260px; box-sizing: border-box;
+  position: relative; min-height: 340px; box-sizing: border-box;
   padding: var(--space-5) var(--space-4) var(--space-4);
   display: flex; flex-direction: column; justify-content: center;
-  background: linear-gradient(180deg, rgba(10,10,9,0.15) 0%, rgba(10,10,9,0.6) 70%, var(--surface-0) 100%), var(--gold-illumination);
+  background:
+    linear-gradient(90deg, rgba(10,10,9,0.88) 0%, rgba(10,10,9,0.55) 45%, rgba(10,10,9,0.08) 72%, transparent 100%),
+    linear-gradient(180deg, rgba(10,10,9,0.05) 0%, rgba(10,10,9,0.35) 60%, var(--surface-0) 100%),
+    url("../home/home-hero-padel.png") right 38% / cover no-repeat,
+    var(--surface-0);
 }
 .home-greeting{ font-size: 28px; line-height: 1.2; margin-top: 6px; }
 .home-greeting-name{ color: var(--gold-bright); }
@@ -829,7 +839,17 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
 .home-tier-sub{ font-family: var(--font-interface); font-size: 11.5px; color: var(--text-dim); }
 .home-yourgame-rating{ flex-direction: column; align-items: flex-start; gap: 2px; }
 .home-rating-num{ font-family: var(--font-interface); font-weight: 700; font-size: 30px; color: var(--text); }
-.home-form-dots{ display: flex; gap: 4px; margin-top: 4px; }
+/* Recent Form needs its own vertical layout (label, then dots+record) --
+   the shared .home-yourgame-group flex-row (used for the Tier badge+text
+   pairing above) was being applied here too, squeezing the label, dots and
+   record text into one fighting-for-space row -- the actual cause of the
+   wrapping on players with a full 10-game window. */
+.home-yourgame-form{ flex-direction: column; align-items: flex-start; gap: 6px; }
+.home-form-row{
+  display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; column-gap: 10px;
+}
+.home-form-dots{ display: flex; gap: 4px; flex-wrap: nowrap; flex-shrink: 0; }
+.home-form-record{ font-family: var(--font-interface); font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
 /* Smaller, unlabelled dots -- less visually dominant than the earlier
    lettered-circle treatment; color alone communicates win/loss. */
 .form-dot{ width: 13px; height: 13px; border-radius: 50%; }
