@@ -39,6 +39,7 @@ Object.keys(SECTION_SUBNAV).forEach(sec=>{
 const MORE_ITEMS = [
   { tab: 'callouts', label: 'Insights / Call-Outs' },
   { special: 'about', label: 'About Power Rankings' },
+  { special: 'doughnuts', label: 'Doughnuts' },
 ];
 const MORE_ADMIN_ITEM = { tab: 'manage', label: 'Admin / Manage' };
 
@@ -63,6 +64,7 @@ function goToSection(section){
   activeSection = section;
   updateBottomNavHighlight();
   renderSectionSubnav();
+  syncPlayHeadingVisibility();
   // Tapping Home always resets to the dashboard view, even if "View Full
   // Review" was open -- an implicit "back to Home" path.
   if(section === 'home'){
@@ -72,8 +74,25 @@ function goToSection(section){
     if(summaryEl) summaryEl.style.display = 'none';
     renderHomeDashboard();
     document.getElementById('homeDashboard').style.display = 'block';
+  } else {
+    // #homeDashboard is a new element app.js's own tab-visibility system has
+    // no knowledge of, so it must be hidden explicitly here -- otherwise,
+    // once Home has been visited once in a session, its content (hero,
+    // Your Game card) stays visible underneath every other section
+    // indefinitely, since nothing else in the app would ever hide it again.
+    const dash = document.getElementById('homeDashboard');
+    if(dash) dash.style.display = 'none';
   }
   updateHeaderForSection();
+}
+
+// Play heading shows for the whole Play section (any of its four sub-tabs),
+// never for other sections -- kept in its own function so both the primary
+// nav path (goToSection) and internal legacy navigation (the #tabrow
+// listener below) stay in sync with whichever is actually active.
+function syncPlayHeadingVisibility(){
+  const el = document.getElementById('playHeading');
+  if(el) el.style.display = (activeSection === 'play') ? 'block' : 'none';
 }
 
 // The header's right-side slot becomes the player switcher on Home
@@ -149,6 +168,21 @@ function buildShellDom(){
   subnav.style.display = 'none';
   header.parentNode.insertBefore(subnav, header.nextSibling);
 
+  // Play heading -- deliberately compact and non-personalised, distinct from
+  // Home's editorial hero. No photographic artwork; a restrained geometric
+  // court-line motif gives Play its own visual signature for now.
+  const playHeading = document.createElement('div');
+  playHeading.id = 'playHeading';
+  playHeading.className = 'play-heading';
+  playHeading.style.display = 'none';
+  playHeading.innerHTML = `
+    <svg class="play-heading-motif" viewBox="0 0 100 40" preserveAspectRatio="none"><line x1="0" y1="20" x2="100" y2="20"/><line x1="50" y1="0" x2="50" y2="40"/><rect x="2" y="8" width="96" height="24" rx="2"/></svg>
+    <div class="mp-section-label">Money Padel</div>
+    <div class="mp-display-title" style="font-size:24px; margin-top:2px;">Play</div>
+    <div class="play-heading-sub">Find the right game. Get it booked. Get on court.</div>
+  `;
+  subnav.parentNode.insertBefore(playHeading, subnav.nextSibling);
+
   // Bottom nav
   const nav = document.createElement('div');
   nav.className = 'shell-bottom-nav';
@@ -161,13 +195,34 @@ function buildShellDom(){
   ];
   nav.innerHTML = navItems.map(it => `
     <button class="shell-nav-item" data-section="${it.section}">
-      <img src="assets/icons/${it.icon}.svg" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'nav-icon-fallback',textContent:'${it.label[0]}'}))">
+      <span class="nav-icon-mount" data-icon="${it.icon}" data-fallback="${it.label[0]}"></span>
       <span>${it.label}</span>
     </button>
   `).join('');
   document.body.appendChild(nav);
   nav.querySelectorAll('.shell-nav-item').forEach(btn=>{
     btn.onclick = ()=> goToSection(btn.dataset.section);
+  });
+
+  // Icons are fetched and embedded as real inline <svg> elements, not
+  // <img src="*.svg">. This matters: currentColor inside an externally
+  // referenced SVG resolves within that SVG's own isolated document, not the
+  // parent page's CSS -- so an <img>-based icon can never pick up the active
+  // gold colour no matter what CSS is written. Inlining fixes this for the
+  // current placeholders and will keep working unchanged once ChatGPT's
+  // final icons land at the same file paths.
+  nav.querySelectorAll('.nav-icon-mount').forEach(mount=>{
+    const iconName = mount.dataset.icon;
+    if(typeof fetch !== 'function'){
+      mount.replaceWith(Object.assign(document.createElement('div'), { className: 'nav-icon-fallback', textContent: mount.dataset.fallback }));
+      return;
+    }
+    fetch(`assets/icons/${iconName}.svg`)
+      .then(r => { if(!r.ok) throw new Error('not found'); return r.text(); })
+      .then(svgText => { mount.innerHTML = svgText; })
+      .catch(()=>{
+        mount.replaceWith(Object.assign(document.createElement('div'), { className: 'nav-icon-fallback', textContent: mount.dataset.fallback }));
+      });
   });
 
   // More sheet
@@ -186,6 +241,11 @@ function buildShellDom(){
       if(btn.dataset.special === 'about'){
         closeMoreSheet();
         openAboutPowerRankings();
+        return;
+      }
+      if(btn.dataset.special === 'doughnuts'){
+        closeMoreSheet();
+        openDoughnutLeaderboard();
         return;
       }
       const b = legacyTabBtn(btn.dataset.tab);
@@ -213,6 +273,32 @@ function buildShellDom(){
       document.body.appendChild(modal);
       modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
     }
+    modal.classList.add('show');
+  }
+
+  // All-time leaderboard of shutout sets given and received -- rebuilt fresh
+  // each time it's opened, since (unlike the static About text) this data
+  // changes as new matches are added.
+  function openDoughnutLeaderboard(){
+    let modal = document.getElementById('doughnutModal');
+    if(!modal){
+      modal = document.createElement('div');
+      modal.className = 'shell-more-sheet';
+      modal.id = 'doughnutModal';
+      modal.innerHTML = `<div class="shell-more-panel">
+        <h3>Doughnuts</h3>
+        <div class="section-sub" style="font-size:11.5px; margin-bottom:12px;">Every 6-0 (or similar shutout set), all time -- given and received.</div>
+        <div id="doughnutModalBody"></div>
+      </div>`;
+      document.body.appendChild(modal);
+      modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
+    }
+    const stats = computeDoughnutStats();
+    const body = document.getElementById('doughnutModalBody');
+    body.innerHTML = stats.length === 0
+      ? `<div class="section-sub">No shutout sets yet this season.</div>`
+      : `<div class="doughnut-header-row"><span>Player</span><span>Given</span><span>Received</span></div>`
+        + stats.map(r => `<div class="doughnut-row"><span class="doughnut-name">${r.name}</span><span class="doughnut-given">${r.given}</span><span class="doughnut-received">${r.received}</span></div>`).join('');
     modal.classList.add('show');
   }
 
@@ -779,6 +865,35 @@ function computeClubPulse(){
 // same Elo expected-score formula already used elsewhere in the app for
 // predicted outcomes -- just orchestrated for "best partner + best opposing
 // pair for that team", which the existing functions don't directly return.
+// Doughnut leaderboard -- who's dished out and copped a 6-0 (or similar
+// shutout set), all-time. Extends the existing "doughnuts received" concept
+// already used in the monthly Summary (a set lost 0-x) with its natural
+// missing other half, "doughnuts given" -- same underlying match data and
+// the same per-set shutout check, just crediting the opposite side too.
+function computeDoughnutStats(){
+  const agg = {};
+  function A(name){
+    if(!agg[name]) agg[name] = { given: 0, received: 0 };
+    return agg[name];
+  }
+  ALL_MATCHES.forEach(raw=>{
+    raw.sets.forEach(([x,y])=>{
+      if(y === 0){ raw.losers.forEach(n=>A(n).received++); raw.winners.forEach(n=>A(n).given++); }
+      if(x === 0){ raw.winners.forEach(n=>A(n).received++); raw.losers.forEach(n=>A(n).given++); }
+    });
+  });
+  getAllApprovedMatches().filter(m=>m.isDraw).forEach(m=>{
+    m.sets.forEach(([x,y])=>{
+      if(y === 0){ m.losers.forEach(n=>A(n).received++); m.winners.forEach(n=>A(n).given++); }
+      if(x === 0){ m.winners.forEach(n=>A(n).received++); m.losers.forEach(n=>A(n).given++); }
+    });
+  });
+  return Object.keys(agg)
+    .map(name => ({ name, given: agg[name].given, received: agg[name].received, total: agg[name].given + agg[name].received }))
+    .filter(r => r.total > 0)
+    .sort((a,b)=> b.total - a.total);
+}
+
 function computeMatchToMake(viewerName){
   const viewer = PLAYERS.find(p=>p.name===viewerName);
   if(!viewer) return null;
@@ -1311,6 +1426,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('tabrow').addEventListener('click', ()=>{
     hero.style.display = (activeTab === 'power') ? 'block' : 'none';
     syncHeaderSectionTitle();
+    syncPlayHeadingVisibility();
+    // Same fix as goToSection: internal navigation (e.g. "Edit this game"
+    // jumping tabs) can also move away from Home without ever going through
+    // goToSection, so this needs covering here too.
+    if(activeSection !== 'home'){
+      const dash = document.getElementById('homeDashboard');
+      if(dash) dash.style.display = 'none';
+    }
   });
 
   updateBottomNavHighlight();
