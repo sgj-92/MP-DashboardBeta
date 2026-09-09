@@ -279,6 +279,59 @@ function buildShellDom(){
   // All-time leaderboard of shutout sets given and received -- rebuilt fresh
   // each time it's opened, since (unlike the static About text) this data
   // changes as new matches are added.
+  let doughnutSortMode = 'total'; // 'total' | 'given' | 'received'
+
+  function formatDoughnutMatch(m){
+    const scoreStr = m.sets.map(([x,y])=> m.shutoutSets.includes(`${x}-${y}`) ? `<b>${x}-${y}</b>` : `${x}-${y}`).join(', ');
+    return `<div class="doughnut-game-row">
+      <span class="section-sub" style="font-size:10.5px;">${dayLabel ? dayLabel(m.date) : m.date}</span>
+      <span class="doughnut-game-teams">${m.winners.join(' & ')} def ${m.losers.join(' & ')}</span>
+      <span class="doughnut-game-score">${scoreStr}</span>
+    </div>`;
+  }
+
+  function renderDoughnutBody(){
+    const stats = computeDoughnutStats();
+    const sorted = stats.slice().sort((a,b)=> b[doughnutSortMode] - a[doughnutSortMode]);
+    const body = document.getElementById('doughnutModalBody');
+    if(sorted.length === 0){
+      body.innerHTML = `<div class="section-sub">No shutout sets yet this season.</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="doughnut-sort-row">
+        <button class="doughnut-sort-btn ${doughnutSortMode==='total'?'active':''}" data-sort="total">Total</button>
+        <button class="doughnut-sort-btn ${doughnutSortMode==='given'?'active':''}" data-sort="given">Most Given</button>
+        <button class="doughnut-sort-btn ${doughnutSortMode==='received'?'active':''}" data-sort="received">Most Received</button>
+      </div>
+      <div class="doughnut-header-row"><span>Player</span><span>Given</span><span>Received</span></div>
+    ` + sorted.map(r => `
+      <div class="doughnut-row-wrap">
+        <div class="doughnut-row" data-name="${r.name}">
+          <span class="doughnut-name">${r.name} <span class="doughnut-chev">›</span></span>
+          <span class="doughnut-given">${r.given}</span>
+          <span class="doughnut-received">${r.received}</span>
+        </div>
+        <div class="doughnut-detail" id="doughnutDetail-${r.name.replace(/\s+/g,'_')}" style="display:none;">
+          ${r.given > 0 ? `<div class="section-sub" style="font-size:10px; margin-top:8px;">GIVEN (${r.given})</div>` + r.givenMatches.map(formatDoughnutMatch).join('') : ''}
+          ${r.received > 0 ? `<div class="section-sub" style="font-size:10px; margin-top:8px;">RECEIVED (${r.received})</div>` + r.receivedMatches.map(formatDoughnutMatch).join('') : ''}
+        </div>
+      </div>
+    `).join('');
+
+    body.querySelectorAll('.doughnut-sort-btn').forEach(btn=>{
+      btn.onclick = ()=>{ doughnutSortMode = btn.dataset.sort; renderDoughnutBody(); };
+    });
+    body.querySelectorAll('.doughnut-row').forEach(row=>{
+      row.onclick = ()=>{
+        const detail = document.getElementById(`doughnutDetail-${row.dataset.name.replace(/\s+/g,'_')}`);
+        const open = detail.style.display !== 'none';
+        detail.style.display = open ? 'none' : 'block';
+        row.querySelector('.doughnut-chev').textContent = open ? '›' : '⌄';
+      };
+    });
+  }
+
   function openDoughnutLeaderboard(){
     let modal = document.getElementById('doughnutModal');
     if(!modal){
@@ -287,18 +340,13 @@ function buildShellDom(){
       modal.id = 'doughnutModal';
       modal.innerHTML = `<div class="shell-more-panel">
         <h3>Doughnuts</h3>
-        <div class="section-sub" style="font-size:11.5px; margin-bottom:12px;">Every 6-0 (or similar shutout set), all time -- given and received.</div>
+        <div class="section-sub" style="font-size:11.5px; margin-bottom:12px;">Every 6-0 (or similar shutout set), all time -- given and received. Tap a player to see the games.</div>
         <div id="doughnutModalBody"></div>
       </div>`;
       document.body.appendChild(modal);
       modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
     }
-    const stats = computeDoughnutStats();
-    const body = document.getElementById('doughnutModalBody');
-    body.innerHTML = stats.length === 0
-      ? `<div class="section-sub">No shutout sets yet this season.</div>`
-      : `<div class="doughnut-header-row"><span>Player</span><span>Given</span><span>Received</span></div>`
-        + stats.map(r => `<div class="doughnut-row"><span class="doughnut-name">${r.name}</span><span class="doughnut-given">${r.given}</span><span class="doughnut-received">${r.received}</span></div>`).join('');
+    renderDoughnutBody();
     modal.classList.add('show');
   }
 
@@ -616,6 +664,12 @@ function buildCompactFiltersBar(){
   // tier pill strip to keep reappearing before.
   function syncToolbarVisibility(){
     toolbar.style.display = (activeTab === 'power' || activeTab === 'wl') ? 'grid' : 'none';
+    // .controls itself is never hidden by app.js -- it only ever hides its
+    // individual children, since nothing previously sat directly beneath it
+    // that would make its own padding visible as a gap. Home's edge-to-edge
+    // hero now sits right there, so the container needs explicit hiding too.
+    const controlsEl = document.querySelector('.controls');
+    if(controlsEl) controlsEl.style.display = (activeTab === 'power' || activeTab === 'wl') ? 'flex' : 'none';
   }
   document.getElementById('tabrow').addEventListener('click', ()=> setTimeout(syncToolbarVisibility, 0));
   syncToolbarVisibility();
@@ -873,25 +927,41 @@ function computeClubPulse(){
 function computeDoughnutStats(){
   const agg = {};
   function A(name){
-    if(!agg[name]) agg[name] = { given: 0, received: 0 };
+    if(!agg[name]) agg[name] = { given: 0, received: 0, givenMatches: [], receivedMatches: [] };
     return agg[name];
   }
-  ALL_MATCHES.forEach(raw=>{
-    raw.sets.forEach(([x,y])=>{
-      if(y === 0){ raw.losers.forEach(n=>A(n).received++); raw.winners.forEach(n=>A(n).given++); }
-      if(x === 0){ raw.winners.forEach(n=>A(n).received++); raw.losers.forEach(n=>A(n).given++); }
-    });
-  });
-  getAllApprovedMatches().filter(m=>m.isDraw).forEach(m=>{
+  function processMatch(m){
+    // Which shutout sets exist, and in which direction, within this one match --
+    // deduped so a match with two 6-0 sets the same way still counts once per
+    // player per category (same total-count logic as before, just also keeping
+    // the match reference now).
+    let winnersGaveShutout = false, losersGaveShutout = false;
+    const shutoutSets = [];
     m.sets.forEach(([x,y])=>{
-      if(y === 0){ m.losers.forEach(n=>A(n).received++); m.winners.forEach(n=>A(n).given++); }
-      if(x === 0){ m.winners.forEach(n=>A(n).received++); m.losers.forEach(n=>A(n).given++); }
+      if(y === 0){ winnersGaveShutout = true; shutoutSets.push(`${x}-${y}`); }
+      if(x === 0){ losersGaveShutout = true; shutoutSets.push(`${x}-${y}`); }
     });
-  });
+    if(!winnersGaveShutout && !losersGaveShutout) return;
+    const matchInfo = { date: m.date, winners: m.winners, losers: m.losers, sets: m.sets, shutoutSets };
+    if(winnersGaveShutout){
+      m.losers.forEach(n=>{ A(n).received++; A(n).receivedMatches.push(matchInfo); });
+      m.winners.forEach(n=>{ A(n).given++; A(n).givenMatches.push(matchInfo); });
+    }
+    if(losersGaveShutout){
+      m.winners.forEach(n=>{ A(n).received++; A(n).receivedMatches.push(matchInfo); });
+      m.losers.forEach(n=>{ A(n).given++; A(n).givenMatches.push(matchInfo); });
+    }
+  }
+  ALL_MATCHES.forEach(processMatch);
+  getAllApprovedMatches().filter(m=>m.isDraw).forEach(processMatch);
+
   return Object.keys(agg)
-    .map(name => ({ name, given: agg[name].given, received: agg[name].received, total: agg[name].given + agg[name].received }))
-    .filter(r => r.total > 0)
-    .sort((a,b)=> b.total - a.total);
+    .map(name => ({
+      name, given: agg[name].given, received: agg[name].received, total: agg[name].given + agg[name].received,
+      givenMatches: agg[name].givenMatches.sort((a,b)=> a.date < b.date ? 1 : -1),
+      receivedMatches: agg[name].receivedMatches.sort((a,b)=> a.date < b.date ? 1 : -1),
+    }))
+    .filter(r => r.total > 0);
 }
 
 function computeMatchToMake(viewerName){
@@ -1174,7 +1244,7 @@ function renderPremiumProfile(name, matchFilter){
       <div class="pp-hero-status">TIER ${p.tier} · ${riskInfo.text.toUpperCase()}</div>
       <div class="pp-hero-rating">${Math.round(p.rating)}</div>
       <div class="pp-hero-rating-label">Power Rating</div>
-      <div class="pp-hero-sub">${snap.tierRank ? `#${snap.tierRank} Tier` : 'Unranked'} · ${snap.overallRank ? `#${snap.overallRank} Overall` : 'Not currently ranked'} · ${p.winpct}% Win Rate</div>
+      <div class="pp-hero-sub">${snap.tierRank ? `#${snap.tierRank} Tier` : 'Unranked'} · ${snap.overallRank ? `#${snap.overallRank} Overall` : 'Not currently ranked'} · ${p.wins}-${p.losses} · ${p.winpct}% Win Rate</div>
     </div>
   `;
 
@@ -1266,13 +1336,21 @@ function renderPremiumProfile(name, matchFilter){
     const start = Math.round(journey[0].rating), end = Math.round(journey[journey.length-1].rating);
     const diff = end - start;
     const diffClass = diff > 0 ? 'perf-pos' : (diff < 0 ? 'perf-neg' : '');
+    const officialRating = Math.round(p.rating);
+    // The journey is a readable story reconstruction (sequential, with a
+    // neutral band for near-expected results) -- not the real engine, which
+    // solves every player's rating jointly at once. The two can genuinely
+    // land on different numbers; rather than silently disagree or force
+    // them to match, the gap is stated plainly whenever it's non-trivial.
+    const journeyDisagreesWithOfficial = Math.abs(end - officialRating) >= 1;
     journeyHtml = `
       <div class="pp-section">
         <div class="pp-section-label">Rating Journey</div>
         <div class="pp-journey-headline">${start} → ${end} <span class="${diffClass}" style="font-size:14px;">(${diff>=0?'+':''}${diff} pts)</span></div>
+        ${journeyDisagreesWithOfficial ? `<div class="pp-journey-disclaimer">Story estimate — official Power Rating is <b>${officialRating}</b></div>` : ''}
         <div class="matchup-vs" style="padding:8px;">${buildJourneyChartSvg(journey)}</div>
         <button class="explainer-toggle" id="ppJourneyInfoToggle" style="padding-left:0;">How ratings work ›</button>
-        <div class="section-sub" id="ppJourneyInfoBody" style="display:none;">This is a readable breakdown of your results, not the official calculation — the real rating is solved jointly across everyone's games at once, so this total won't always land exactly on the Power Rating shown above, but the direction and shape of the trend will match your actual results.</div>
+        <div class="section-sub" id="ppJourneyInfoBody" style="display:none;">This is a readable story of your results, not the official calculation — the real rating is solved jointly across everyone's games at once, using every match together rather than one result at a time, and close-to-expected results here are shown as no change to keep the story focused on what actually moved the needle. That's why this total won't always land exactly on the Power Rating shown above, even though the direction and shape of the trend reflects your actual results.</div>
       </div>
     `;
   }
@@ -1308,10 +1386,16 @@ function renderPremiumProfile(name, matchFilter){
   const sheetProfileEl = document.getElementById('sheetProfile');
   sheetProfileEl.parentNode.insertBefore(wrap, sheetProfileEl);
 
-  // Hide (not delete) the legacy prose/section blocks -- their data has been
-  // reused above; the dev-areas block and match cards are reparented instead
-  // of hidden, since those still carry live Firestore-write event listeners.
+  // Hide (not delete) the legacy header + prose/section blocks -- their data
+  // has been reused above (the old name/tier/risk + four-stat-box summary
+  // otherwise duplicates the new hero); the dev-areas block and match cards
+  // are reparented instead of hidden, since those still carry live
+  // Firestore-write event listeners.
   sheetProfileEl.style.display = 'none';
+  ['sheetName','sheetSub','sheetStats'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.display = 'none';
+  });
 
   const devWrap = document.getElementById('devAreasSectionWrap');
   if(devWrap) document.getElementById('ppDevAreasHost').appendChild(devWrap);
