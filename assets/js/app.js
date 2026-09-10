@@ -1008,7 +1008,7 @@ document.querySelectorAll('#tabrow .tab-btn').forEach(b=>{
       wl: 'Parsed from the group chats, June–August 2026 · tap a player for their match log',
       power: 'A tier-anchored power rating · scoreline counts, not just who won · tap a player for details',
       callouts: 'Games worth setting up next, based on what the data can\'t yet confirm',
-      findgame: 'Pick a player, a scope, and a difficulty — generate real opponent options on demand',
+      findgame: 'Pick a player, a scope, and a difficulty — get a complete four-player match, ready to book',
       manage: 'Add results going forward and tag who\'s active — everything above recalculates instantly',
       games: 'Every game, newest first — pending ones need approval before they count',
       h2h: 'Pick two players and see their full history, as opponents and as teammates',
@@ -1023,7 +1023,7 @@ document.querySelectorAll('#tabrow .tab-btn').forEach(b=>{
       wl: 'Built from readable trophy-emoji results across the main group chat and Results Only, with names and tiers confirmed against the group. Excludes single-set/"money game" results, matches against non-members, and a couple of results with no opponent named or a disputed winner.',
       power: 'Ratings start from the tier each player is already known to sit in (S highest, C lowest) — the tiers are treated as real signal, not something the model has to rediscover from scratch. From there, results move you based on <b>games won within each match</b>, not just who won — a close 3-set loss barely costs anything, a 6-1 6-2 loss costs a lot. A player with few games stays close to their tier baseline since there isn\'t much evidence yet to move them; a player with a long track record can drift further from it. "Avg opp." is the average strength of everyone you\'ve played with and against. "Clutch %" compares your actual scorelines to what your tier and opponents would predict. "Upset wins/losses" count matches where the underdog won outright (or the favorite lost outright) by a meaningful ratings gap — a fast way to spot giant-killers and upset-prone favorites. Use the min-games filter below to hide anyone with too few games for these numbers to mean much. "Recent Form" sorts by wins over the last 10 games first, then by average overperformance as a tiebreaker — a faster-moving signal than the overall rating, useful for spotting who\'s trending right now.',
       callouts: 'Suggested matchups are full 2v2s — a wingman is added to each side, chosen to keep team strength balanced, so these are games you could actually go and organize. This spans every tier, not just the ones with the least data — S/A near-ties get surfaced the same way as small-sample C-tier players. Every player also has their own Easy / Balanced / Hard opponent suggestions on their profile page. The Data filter above changes which matches feed these ratings — defaults to June onwards only.',
-      findgame: '"Within my tier" keeps every suggested player inside your own tier — easy always means the weakest pair actually in your tier, hard the strongest, never a reach into a different tier. "Any tier" opens it up and targets a rating roughly 150 points below/above your own. Each suggested opponent pair also comes with a partner recommendation — the player who\'d make it an even match, with a proven-chemistry option flagged where one exists. Five options shown each time, ranked by fit — this is computed live, not a fixed list, so try different scopes and difficulties freely. Players who\'ve gone inactive are excluded from every suggestion here, though their history stays visible elsewhere.',
+      findgame: '"Within my tier" keeps every suggested player inside your own tier — easy always means the weakest pair actually in your tier, hard the strongest, never a reach into a different tier. "Any tier" opens it up and targets a rating roughly 150 points below/above your own. Every recommendation is a full four-player match: the ranked opponent pair, plus the partner who\'d make it an even match (a proven-chemistry partner is used automatically when one is just as close). The percentage split uses the same rating-based expected-outcome formula used everywhere else in the app. Alternatives are only labeled Fresh Matchup, Proven Chemistry or Tougher Test when the data actually supports that read — "See all recommendations" has the full ranked list underneath. This is computed live, not a fixed list, so try different scopes and difficulties freely. Players who\'ve gone inactive are excluded from every suggestion here, though their history stays visible elsewhere.',
       manage: 'This data is shared — anyone who opens this artifact sees the same games and tags. Ratings, tiers, and every suggestion above recompute from scratch the moment you add a game or change a tag.',
       games: 'Editing or deleting a game recalculates every rating instantly. Your name is required for any change here so the group can see who touched what.',
       h2h: 'Opponent record only counts matches where the two were on opposite teams; teammate record only counts matches where they played together.',
@@ -1628,62 +1628,222 @@ function suggestPartnerForTarget(player, targetTeamAvg, scope, excludeNames){
   return { closest, chemistryPartner: chemMatches.length ? chemMatches[0] : null };
 }
 
+// ===== Complete-match recommendations (Play / Find Game) =====
+// Assembles the same two building blocks the legacy "Suggested opponents &
+// who to bring" list already used -- generateCandidatePairs (opponent-pair
+// ranking, scope/difficulty aware) and suggestPartnerForTarget (the partner
+// who'd make that specific pair an even match, with a proven-chemistry flag)
+// -- into single four-player recommendations instead of two separate lists.
+// The predicted split reuses the same Elo expected-score formula already
+// used for every other predicted outcome in the app (see enrichMatches /
+// computeElo). No new matchmaking math, just a different presentation.
+function lookupPartnership(a, b){
+  return PARTNERSHIPS.find(pt => pt.pair.includes(a) && pt.pair.includes(b)) || null;
+}
+
+function eloExpectedShare(ratingFor, ratingAgainst){
+  return 1/(1+Math.pow(10,(ratingAgainst-ratingFor)/400));
+}
+
+function buildCompleteMatch(player, oppCandidate, scope){
+  const ps = suggestPartnerForTarget(player, oppCandidate.avg, scope, oppCandidate.pair);
+  if(!ps.closest) return null;
+  const partner = PLAYERS.find(p=>p.name===ps.closest.name);
+  const opponents = [PLAYERS.find(p=>p.name===oppCandidate.pair[0]), PLAYERS.find(p=>p.name===oppCandidate.pair[1])];
+  if(!partner || !opponents[0] || !opponents[1]) return null;
+
+  const teamRating = (player.rating + partner.rating) / 2;
+  const oppRating = oppCandidate.avg;
+  const pct = Math.round(eloExpectedShare(teamRating, oppRating) * 100);
+  const partnership = lookupPartnership(player.name, partner.name);
+  const exposure = (partnership ? partnership.games : 0) + oppCandidate.played_p + oppCandidate.played_q;
+
+  const veryEven = Math.abs(pct-50) <= 3;
+  const balanceDesc = veryEven ? 'Almost perfectly balanced'
+    : (pct > 50 ? `A slight edge to ${player.name}'s side` : 'A slight edge to the opponents');
+  const partnerClause = partnership
+    ? `a partnership with real chemistry (${partnership.wins}-${partnership.losses} together, ${partnership.avg_overperf>=0?'+':''}${partnership.avg_overperf}% overperformance)`
+    : 'a fresh partnership combination';
+  const whyLine = `${veryEven ? 'Very even ratings' : balanceDesc} with ${partnerClause}.`;
+
+  return {
+    player, partner, opponents, tiers: oppCandidate.tiers,
+    teamRating: Math.round(teamRating*10)/10, oppRating,
+    pctFor: pct, pctAgainst: 100-pct,
+    balanceDesc, whyLine, partnership, exposure,
+    gap: oppCandidate.gap, playedOpp: [oppCandidate.played_p, oppCandidate.played_q],
+  };
+}
+
+function buildFindGameRecommendations(player, scope, diff){
+  const candidates = generateCandidatePairs(player, scope, diff, 10);
+  const matches = candidates.map(c => buildCompleteMatch(player, c, scope)).filter(Boolean);
+  if(matches.length === 0) return null;
+
+  const best = matches[0];
+  const rest = matches.slice(1);
+  const used = new Set();
+  const alternatives = [];
+
+  // Fresh Matchup -- the remaining option you (and your assembled team) have
+  // the least shared history with, only labeled when that's genuinely low.
+  const freshest = rest.filter(m=>!used.has(m)).sort((a,b)=>a.exposure-b.exposure)[0];
+  if(freshest && freshest.exposure <= 2){
+    alternatives.push({ tag:'Fresh Matchup', tagline:"A combination you haven't played much.", match: freshest });
+    used.add(freshest);
+  }
+
+  // Proven Chemistry -- only when a remaining option's assembled partner
+  // actually has a real (2+ game) partnership record.
+  const proven = rest.filter(m=>!used.has(m) && m.partnership).sort((a,b)=>b.partnership.avg_overperf-a.partnership.avg_overperf)[0];
+  if(proven){
+    alternatives.push({ tag:'Proven Chemistry', tagline:'A partnership with a strong track record.', match: proven });
+    used.add(proven);
+  }
+
+  // Tougher Test -- a genuinely stronger opponent pair than BEST MATCH,
+  // only offered once you've already chosen Balanced or Hard.
+  if(diff !== 'easy'){
+    const tougher = rest.filter(m=>!used.has(m) && m.oppRating > best.oppRating).sort((a,b)=>b.oppRating-a.oppRating)[0];
+    if(tougher){
+      alternatives.push({ tag:'Tougher Test', tagline:'A stronger pair, if you want the harder test.', match: tougher });
+      used.add(tougher);
+    }
+  }
+
+  return { best, alternatives: alternatives.slice(0,3), all: matches };
+}
+
+function pmInitials(name){
+  return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+}
+
+function renderMatchTeams(m){
+  return `<div class="pm-teams">
+    <div class="pm-team pm-team-a">
+      <div class="pm-team-player"><span class="pm-avatar">${pmInitials(m.player.name)}</span><span class="pm-name">${m.player.name}</span></div>
+      <div class="pm-team-player"><span class="pm-avatar">${pmInitials(m.partner.name)}</span><span class="pm-name">${m.partner.name}</span></div>
+    </div>
+    <div class="pm-vs">VS</div>
+    <div class="pm-team pm-team-b">
+      <div class="pm-team-player"><span class="pm-avatar">${pmInitials(m.opponents[0].name)}</span><span class="pm-name">${m.opponents[0].name}</span></div>
+      <div class="pm-team-player"><span class="pm-avatar">${pmInitials(m.opponents[1].name)}</span><span class="pm-name">${m.opponents[1].name}</span></div>
+    </div>
+  </div>`;
+}
+
+function renderBestMatchCard(m){
+  const tierNote = m.tiers[0]===m.tiers[1] ? `Tier ${m.tiers[0]}` : `Tier ${m.tiers[0]} &amp; Tier ${m.tiers[1]}`;
+  const partnershipLine = m.partnership
+    ? `${m.player.name} &amp; ${m.partner.name}: ${m.partnership.games} games together, ${m.partnership.wins}-${m.partnership.losses} (${m.partnership.winpct}%)`
+    : `${m.player.name} and ${m.partner.name} haven't built up a partnership record together yet.`;
+  return `<div class="pm-best mp-card-prestige">
+    <div class="pm-best-label">Best Match</div>
+    <div class="pm-best-pct">${m.pctFor}% – ${m.pctAgainst}%</div>
+    <div class="pm-best-balance">${m.balanceDesc}</div>
+    ${renderMatchTeams(m)}
+    <div class="pm-why">${m.whyLine}</div>
+    <div class="pm-actions">
+      <button class="mp-btn-primary" id="pmRequestBtn">Request Game ›</button>
+      <button class="mp-btn-secondary" id="pmDetailBtn">View Full Breakdown</button>
+    </div>
+    <div class="pm-detail" id="pmDetail" hidden>
+      <div class="pm-detail-line"><b>${m.player.name} &amp; ${m.partner.name}</b> — avg rating ${m.teamRating}</div>
+      <div class="pm-detail-line"><b>${m.opponents[0].name} &amp; ${m.opponents[1].name}</b> (${tierNote}) — avg rating ${m.oppRating}</div>
+      <div class="pm-detail-line">${partnershipLine}</div>
+      <div class="pm-detail-line">You've played ${m.opponents[0].name} ${m.playedOpp[0]}x and ${m.opponents[1].name} ${m.playedOpp[1]}x.</div>
+    </div>
+  </div>`;
+}
+
+function renderAltCard(alt, idx){
+  const m = alt.match;
+  return `<div class="pm-alt-card">
+    <div class="pm-alt-tag">${alt.tag}</div>
+    <div class="pm-alt-tagline">${alt.tagline}</div>
+    <div class="pm-alt-teams">
+      <span><b>${m.player.name} &amp; ${m.partner.name}</b></span>
+      <span class="pm-alt-vs">vs</span>
+      <span><b>${m.opponents[0].name} &amp; ${m.opponents[1].name}</b></span>
+    </div>
+    <div class="pm-alt-pct">${m.pctFor}% – ${m.pctAgainst}% · ${m.balanceDesc.toLowerCase()}</div>
+    <button class="pm-alt-cta-btn" data-alt-idx="${idx}">Request this instead ›</button>
+  </div>`;
+}
+
+function renderSeeAllSection(matches){
+  const rows = matches.map(m=>`<div class="pm-all-row">
+      <span><b>${m.player.name} &amp; ${m.partner.name}</b> vs <b>${m.opponents[0].name} &amp; ${m.opponents[1].name}</b></span>
+      <span class="pm-all-pct">${m.pctFor}%–${m.pctAgainst}%</span>
+    </div>`).join('');
+  return `<button class="pm-seeall-btn" id="pmSeeAllBtn">See all recommendations ›</button>
+    <div class="pm-all-list" id="pmAllList" hidden>${rows}</div>`;
+}
+
+// Navigates to the Requests tab (legacy "wishlist") and pre-fills the four
+// players from a recommendation card. Reuses the existing request form and
+// its existing submit/validation logic entirely untouched -- this only fills
+// fields, the user still reviews and taps "Request this game" themselves,
+// same as every other cross-tab prefill in this app (see
+// navigateToGamesTabForResult above).
+function navigateToWishlistForMatch(m){
+  const names = [m.player.name, m.partner.name, m.opponents[0].name, m.opponents[1].name];
+  const wishlistTabBtn = document.querySelector('#tabrow .tab-btn[data-tab="wishlist"]');
+  if(wishlistTabBtn) wishlistTabBtn.click();
+  const p1 = document.getElementById('reqP1');
+  if(p1){
+    p1.value = names[0];
+    document.getElementById('reqP2').value = names[1];
+    document.getElementById('reqP3').value = names[2];
+    document.getElementById('reqP4').value = names[3];
+    const anchor = document.getElementById('reqSubmit');
+    if(anchor){ try { anchor.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){ /* non-critical */ } }
+  }
+}
+
 function renderFindGameResults(){
   const player = PLAYERS.find(p=>p.name===fgPlayer);
   if(!player) return;
-  const candidates = generateCandidatePairs(player, fgScope, fgDiff, 5);
-  const partners = generateCandidatePartners(player, fgScope, 3);
   const box = document.getElementById('fgResults');
+  const recs = buildFindGameRecommendations(player, fgScope, fgDiff);
 
-  const diffLabel = {easy:'Easy', balanced:'Balanced', hard:'Hard'}[fgDiff];
-  const scopeLabel = fgScope==='tier' ? `within Tier ${player.tier}` : 'across any tier';
-
-  let html = `<div class="section-heading" style="margin-top:2px;">🤝 Suggested partners</div>`;
-  html += `<div class="section-sub">Proven chemistry first, then the closest-rated fresh option, ${scopeLabel}.</div>`;
-  if(partners.history.length === 0 && partners.fresh.length === 0){
-    html += `<div class="section-sub">Not enough other players in this scope — try "Any tier".</div>`;
-  } else {
-    partners.history.forEach(h=>{
-      const smallSample = h.games < 3 ? ' (small sample)' : '';
-      html += `<div class="fg-result-card">
-        <div class="fg-result-rank">Proven chemistry</div>
-        <div class="fg-result-teams"><b>${h.name}</b></div>
-        <div class="fg-result-detail">${h.games} games together · ${h.wins}-${h.losses} (${h.winpct}%) · ${h.chemistry>=0?'+':''}${h.chemistry}% chemistry${smallSample}</div>
-      </div>`;
-    });
-    partners.fresh.forEach(f=>{
-      html += `<div class="fg-result-card">
-        <div class="fg-result-rank">Fresh option</div>
-        <div class="fg-result-teams"><b>${f.name}</b></div>
-        <div class="fg-result-detail">Tier ${f.tier} · rating ${Math.round(f.rating)} (${f.gap} pt gap) · played together ${f.played}x</div>
-      </div>`;
-    });
+  if(!recs){
+    box.innerHTML = `<div class="section-sub" style="margin-top:6px;">Not enough other players in this scope to suggest a full match — try "Any tier".</div>`;
+    return;
   }
 
-  html += `<div class="section-heading">🎯 Suggested opponents &amp; who to bring</div>`;
-  html += `<div class="section-sub">Best ${diffLabel.toLowerCase()} opponent pairs for <b style="color:var(--text);">${player.name}</b> (${Math.round(player.rating)}), ${scopeLabel} — each paired with the partner that would make it an even match.</div>`;
-
-  if(candidates.length === 0){
-    html += `<div class="section-sub">Not enough other players in this scope to suggest anything — try "Any tier".</div>`;
-  } else {
-    candidates.forEach((c, i)=>{
-      const tierNote = c.tiers[0]===c.tiers[1] ? `Tier ${c.tiers[0]}` : `Tier ${c.tiers[0]} &amp; Tier ${c.tiers[1]}`;
-      const ps = suggestPartnerForTarget(player, c.avg, fgScope, c.pair);
-      let partnerLine = '';
-      if(ps.chemistryPartner && ps.chemistryPartner !== ps.closest?.name){
-        partnerLine = `<div style="margin-top:5px; font-size:11px; color:var(--gold-bright);">Bring: ${ps.chemistryPartner} (proven chemistry) — or ${ps.closest ? ps.closest.name+' ('+Math.round(ps.closest.rating)+') for the closest even match' : 'no rating-matched option in this scope'}</div>`;
-      } else if(ps.closest){
-        partnerLine = `<div style="margin-top:5px; font-size:11px; color:var(--text-dim);">Bring: <b style="color:var(--gold-bright);">${ps.closest.name}</b> (Tier ${ps.closest.tier}, ${Math.round(ps.closest.rating)}) to even it up</div>`;
-      }
-      html += `<div class="fg-result-card">
-        <div class="fg-result-rank">Option ${i+1}</div>
-        <div class="fg-result-teams"><b>${c.pair[0]} &amp; ${c.pair[1]}</b></div>
-        <div class="fg-result-detail">${tierNote} · avg rating ${c.avg} &nbsp;·&nbsp; you've played ${c.pair[0]} ${c.played_p}x, ${c.pair[1]} ${c.played_q}x</div>
-        ${partnerLine}
-      </div>`;
-    });
+  let html = renderBestMatchCard(recs.best);
+  if(recs.alternatives.length){
+    html += `<div class="pm-alt-heading">Alternatives</div>`;
+    recs.alternatives.forEach((alt,i)=>{ html += renderAltCard(alt, i); });
   }
+  html += renderSeeAllSection(recs.all);
   box.innerHTML = html;
+
+  document.getElementById('pmRequestBtn').onclick = ()=> navigateToWishlistForMatch(recs.best);
+
+  const detailBtn = document.getElementById('pmDetailBtn');
+  const detailBox = document.getElementById('pmDetail');
+  detailBtn.onclick = ()=>{
+    const willShow = detailBox.hidden;
+    detailBox.hidden = !willShow;
+    detailBtn.textContent = willShow ? 'Hide Breakdown' : 'View Full Breakdown';
+  };
+
+  box.querySelectorAll('.pm-alt-cta-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      const idx = parseInt(btn.dataset.altIdx, 10);
+      navigateToWishlistForMatch(recs.alternatives[idx].match);
+    };
+  });
+
+  const seeAllBtn = document.getElementById('pmSeeAllBtn');
+  const allList = document.getElementById('pmAllList');
+  seeAllBtn.onclick = ()=>{
+    const willShow = allList.hidden;
+    allList.hidden = !willShow;
+    seeAllBtn.textContent = willShow ? 'Hide full list ‹' : 'See all recommendations ›';
+  };
 }
 
 function renderFindGame(){

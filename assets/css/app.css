@@ -334,6 +334,25 @@
   .fg-toggle-btn.diff-balanced.active{ color:var(--gold-bright); border-color:var(--gold-dim); background:rgba(212,175,55,.12); }
   .fg-toggle-btn.diff-hard.active{ color:#e8a5a1; border-color:var(--red); background:rgba(181,69,63,.12); }
 
+  /* Play / Find Game -- compact "match brief" controls, distinct from the
+     .fg-controls used on Wishlist/Summary (left untouched). Same underlying
+     inputs and ids, just a tighter layout so the controls read as a brief
+     rather than the dominant feature of the screen. */
+  .play-brief{
+    background:var(--surface-1); border:1px solid var(--surface-border); border-radius:var(--radius-md);
+    padding:12px 14px; margin:10px 0 16px;
+    font-family:'Helvetica Neue', Arial, sans-serif;
+  }
+  .play-brief-eyebrow{
+    font-family:'Helvetica Neue', Arial, sans-serif; font-size:9.5px; font-weight:700;
+    letter-spacing:.08em; text-transform:uppercase; color:var(--text-dim); opacity:.75; margin-bottom:8px;
+  }
+  .play-brief-row{ margin-bottom:8px; }
+  .play-brief-row:last-child{ margin-bottom:0; }
+  .play-brief .fg-label{ font-size:10px; margin-bottom:4px; }
+  .play-brief .fg-select{ padding:7px 9px; font-size:13px; }
+  .play-brief .fg-toggle-btn{ font-size:12px; padding:7px 4px; white-space:nowrap; }
+
   .fg-result-card{
     background:var(--bg1); border:1px solid var(--line); border-radius:10px;
     padding:12px; margin-bottom:9px;
@@ -900,8 +919,19 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
   background: linear-gradient(180deg, var(--gold-bright), var(--gold));
   border: none; border-radius: var(--radius-sm);
   color: #1a1408; font-family: var(--font-interface); font-size: 13px; font-weight: 700;
-  height: 40px; padding: 0 18px; cursor: pointer;
-  box-shadow: 0 2px 8px rgba(212,175,55,0.25);
+  height: 38px; padding: 0 16px; cursor: pointer;
+  box-shadow: 0 1px 4px rgba(212,175,55,0.18);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Secondary CTA -- outlined, restrained. Pairs with .mp-btn-primary wherever
+   a card needs a lighter second action (e.g. Play's BEST MATCH card). */
+.mp-btn-secondary{
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  background: transparent; border: 1px solid var(--gold-hairline); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font-interface); font-size: 13px; font-weight: 600;
+  height: 38px; padding: 0 14px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 .home-nextcourt{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -1012,6 +1042,107 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
 }
 .play-heading-sub{
   font-family: var(--font-interface); font-size: 12px; color: var(--text-dim); margin-top: 4px;
+}
+
+/* ==========================================================================
+   PLAY -- complete-match recommendation cards ("match room" presentation).
+   Built entirely on top of the existing Find a Game engine -- these classes
+   only change how the same computed numbers are laid out, never what's
+   calculated. Distinct from Home: a tactical/prestige card, not an
+   editorial one, and never shown outside the Play section.
+   ========================================================================== */
+.pm-best{
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+.pm-best-label{
+  font-family: var(--font-interface); font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--gold-bright);
+}
+.pm-best-pct{
+  font-family: var(--font-interface); font-weight: 700; font-size: 28px; color: var(--text);
+  margin: 6px 0 0; letter-spacing: -0.01em; line-height: 1.1;
+}
+.pm-best-balance{
+  font-family: var(--font-interface); font-size: 12px; color: var(--text-dim); margin-top: 3px;
+}
+.pm-teams{
+  display: flex; align-items: center; justify-content: center; gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+.pm-team{ flex: 1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.pm-team-player{ display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pm-team-a .pm-team-player{ justify-content: flex-start; }
+.pm-team-b .pm-team-player{ justify-content: flex-end; }
+.pm-avatar{
+  width: 30px; height: 30px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--surface-border);
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-interface); font-size: 10.5px; font-weight: 700; color: var(--text);
+  flex-shrink: 0;
+}
+.pm-name{
+  font-family: var(--font-prestige); font-size: 15px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.pm-vs{
+  font-family: var(--font-interface); font-size: 10.5px; font-weight: 700; color: var(--text-dim);
+  flex: 0 0 auto; padding: 0 2px;
+}
+.pm-why{
+  font-family: var(--font-interface); font-size: 12.5px; color: var(--text); line-height: 1.5;
+  padding-top: var(--space-3); border-top: 1px solid var(--surface-border-soft);
+}
+.pm-actions{ display: flex; gap: 8px; margin-top: var(--space-4); }
+.pm-actions .mp-btn-primary, .pm-actions .mp-btn-secondary{ flex: 1; }
+.pm-detail{ margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--surface-border-soft); }
+.pm-detail-line{ font-family: var(--font-interface); font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; line-height: 1.5; }
+.pm-detail-line:last-child{ margin-bottom: 0; }
+.pm-detail-line b{ color: var(--text); }
+
+.pm-alt-heading{
+  font-family: var(--font-interface); font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-dim); margin: 4px 0 8px;
+}
+.pm-alt-card{
+  background: var(--surface-1); border: 1px solid var(--surface-border); border-radius: var(--radius-md);
+  padding: 12px 14px; margin-bottom: 8px;
+}
+.pm-alt-tag{
+  font-family: var(--font-interface); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--gold-dim); margin-bottom: 2px;
+}
+.pm-alt-tagline{ font-family: var(--font-interface); font-size: 11px; color: var(--text-dim); margin-bottom: 9px; }
+.pm-alt-teams{
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-family: var(--font-interface); font-size: 12.5px; color: var(--text);
+}
+.pm-alt-teams span{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-alt-teams b{ color: var(--gold-bright); font-weight: 600; }
+.pm-alt-vs{ color: var(--text-dim); font-size: 10.5px; font-weight: 700; flex: 0 0 auto; }
+.pm-alt-pct{ font-family: var(--font-interface); font-size: 11px; color: var(--text-dim); margin-top: 7px; }
+.pm-alt-cta-btn{
+  display: block; margin-top: 9px; background: transparent; border: none; padding: 0;
+  color: var(--gold-dim); font-family: var(--font-interface); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+
+.pm-seeall-btn{
+  display: block; width: 100%; text-align: center; background: transparent; border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm); color: var(--text-dim); font-family: var(--font-interface); font-size: 12px; font-weight: 600;
+  padding: 10px 0; margin-top: 4px; cursor: pointer;
+}
+.pm-all-list{ margin-top: 8px; }
+.pm-all-row{
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-family: var(--font-interface); font-size: 11.5px; color: var(--text-dim);
+  padding: 9px 2px; border-bottom: 1px solid var(--surface-border-soft);
+}
+.pm-all-row span:first-child{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-all-row b{ color: var(--text); font-weight: 600; }
+.pm-all-pct{ flex: 0 0 auto; }
+
+@media (max-width: 360px){
+  .pm-name{ font-size: 13.5px; }
+  .pm-best-pct{ font-size: 24px; }
+  .pm-avatar{ width: 26px; height: 26px; font-size: 9.5px; }
 }
 
 /* Doughnut leaderboard -- simple, restrained list, no emoji per the
