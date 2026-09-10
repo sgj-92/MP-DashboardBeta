@@ -7,6 +7,43 @@ const BASE_ACTIVE = {"Manny": true, "Erf": true, "Kaz": true, "Twoshay": false, 
 // (BASE_TIERS, above) is still what's used everywhere else: Find a Game, tier boundaries, badges.
 const BASE_STARTING_TIER = {"Fatch": "C"};
 
+// ===================== NORTH VS SOUTH (Box Office Cup) =====================
+// A one-off exhibition team event between two padel groups -- entirely
+// separate from the Money Padel rating system. Nothing here reads or writes
+// PLAYERS/MATCHES/ratings/tiers; it's surfaced in the More section as its
+// own self-contained page. Fixtures are hardcoded like BASE_MATCHES once
+// the list is confirmed (they're fixed for the event, not something that
+// needs live editing); only match results are Firestore-backed, added live
+// on the night -- same "base data + live overlay" split used everywhere
+// else in this app.
+const NORTH_SOUTH_EVENT = {
+  name: 'Box Office Cup',
+  subtitle: 'North vs South',
+  date: 'Thursday 10 September',
+  time: '7:30pm – 11:00pm',
+  venue: 'Encore Padel',
+  address: 'Unit GH, Ventura Park, Radlett, St Albans, AL2 2DB',
+  notes: [
+    'Team event — a different partner from your own team each match.',
+    'Each player plays 3 matches.',
+    'Fast4: first to 4 games, tiebreak at 3-3 (to 7). If the match reaches one set each, a match tiebreak to 10 decides it.',
+    'Star Point: golden point after the second deuce.',
+    '3 points for a win. 1 point for a loss where you still won a set, or for a draw (unfinished on time). 0 points for a straight-sets loss.',
+    'Trophy for the winning team, plus Best & Worst Player of the day.',
+  ],
+};
+
+// The confirmed "Our Team" roster. Which side this actually is (North or
+// South) is just a label choice -- kept as NORTH here since that's the team
+// named in the reminder message.
+const NORTH_ROSTER = ['KC', 'Kaz', 'Erf', 'Tom', 'Osh', 'Rishi', 'Max', 'Len'];
+const SOUTH_ROSTER = []; // filled in once the fixture list confirms South's players
+
+// Each fixture is one North pair vs one South pair. Populated once the
+// fixture list is confirmed -- e.g. { id:'ns1', round:1, north:['KC','Kaz'], south:['?','?'] }.
+// Results are never stored here; see northSouthResultsState below.
+const NORTH_SOUTH_FIXTURES = [];
+
 // ===================== LIVE STATE =====================
 let ALL_MATCHES = [];      // BASE_MATCHES + user-added
 let TIER_MAP = {};         // name -> tier (base + overrides + new players)
@@ -72,6 +109,7 @@ const STORAGE_KEY_MY_NAME = 'moneypadel_my_name';          // personal — local
 const STORAGE_KEY_GAME_REQUESTS = 'moneypadel_game_requests'; // shared: wishlist + upcoming games
 const STORAGE_KEY_DEV_AREAS = 'moneypadel_dev_areas'; // shared: freeform per-player development notes
 const STORAGE_KEY_CHALLENGES = 'moneypadel_challenges'; // shared: sequential turn-based match challenges (separate from gameRequestsState -- see buildCompleteMatchWithPartner/bridgeChallengeToRequest below for why)
+const STORAGE_KEY_NS_RESULTS = 'moneypadel_north_south_results'; // shared: live results for the North vs South exhibition, keyed by fixture id -- see NORTH_SOUTH_FIXTURES above
 
 // Sections an admin can hide from non-admin viewers. Admins always see everything.
 const VISIBILITY_DEFAULTS = {
@@ -161,6 +199,62 @@ async function saveChallenges(challenges){
     await fsSet(STORAGE_KEY_CHALLENGES, JSON.stringify(challenges));
     return true;
   } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save challenges failed', e); return false; }
+}
+
+// fixture id -> {sets:[[northGames,southGames],...], matchTiebreak:[n,s]|null, status:'completed'|'draw'}
+let northSouthResultsState = {};
+
+async function loadNorthSouthResults(){
+  try { const v = await fsGet(STORAGE_KEY_NS_RESULTS); if(v) return JSON.parse(v); } catch(e){ console.error('load north vs south results failed', e); }
+  return {};
+}
+async function saveNorthSouthResults(results){
+  try {
+    await fsSet(STORAGE_KEY_NS_RESULTS, JSON.stringify(results));
+    return true;
+  } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save north vs south results failed', e); return false; }
+}
+
+function getNorthSouthFixtureResult(fx){
+  return northSouthResultsState[fx.id] || null;
+}
+
+// Winner always gets 3. The losing side gets 1 only if they actually won a
+// set -- only possible when the match went one set each and was decided by
+// the match tiebreak. A draw (ran out of time, unfinished) is 1 point each.
+function scoreNorthSouthFixture(fx){
+  const res = getNorthSouthFixtureResult(fx);
+  if(!res) return null;
+  if(res.status === 'draw') return { northPts:1, southPts:1, northSets:0, southSets:0, winner:null };
+  let northSets = 0, southSets = 0;
+  (res.sets || []).forEach(([n,s])=>{ if(n>s) northSets++; else if(s>n) southSets++; });
+  let winner = null;
+  if(northSets>=2 || southSets>=2){
+    winner = northSets>southSets ? 'north' : 'south';
+  } else if(northSets===1 && southSets===1 && res.matchTiebreak){
+    winner = res.matchTiebreak[0]>res.matchTiebreak[1] ? 'north' : 'south';
+  }
+  if(!winner) return null; // incomplete data (e.g. only one set logged so far) -- not decided yet
+  const northPts = winner==='north' ? 3 : (northSets>=1 ? 1 : 0);
+  const southPts = winner==='south' ? 3 : (southSets>=1 ? 1 : 0);
+  return { northPts, southPts, northSets, southSets, winner };
+}
+
+function computeNorthSouthTable(){
+  const blank = ()=>({ played:0, won:0, drawn:0, lost:0, setsFor:0, setsAgainst:0, points:0 });
+  const table = { north: blank(), south: blank() };
+  NORTH_SOUTH_FIXTURES.forEach(fx=>{
+    const r = scoreNorthSouthFixture(fx);
+    if(!r) return;
+    table.north.played++; table.south.played++;
+    table.north.setsFor += r.northSets; table.north.setsAgainst += r.southSets;
+    table.south.setsFor += r.southSets; table.south.setsAgainst += r.northSets;
+    table.north.points += r.northPts; table.south.points += r.southPts;
+    if(r.winner==='north'){ table.north.won++; table.south.lost++; }
+    else if(r.winner==='south'){ table.south.won++; table.north.lost++; }
+    else { table.north.drawn++; table.south.drawn++; }
+  });
+  return table;
 }
 
 async function loadStoredData(){
@@ -4761,6 +4855,7 @@ async function init(){
   gameRequestsState = await loadGameRequests();
   devAreasState = await loadDevAreas();
   challengesState = await loadChallenges();
+  northSouthResultsState = await loadNorthSouthResults();
   recomputeAll();
   applyTabVisibility();
   render();
