@@ -71,6 +71,7 @@ const STORAGE_KEY_VISIBILITY = 'moneypadel_visibility';    // shared: which sect
 const STORAGE_KEY_MY_NAME = 'moneypadel_my_name';          // personal — localStorage, this device only
 const STORAGE_KEY_GAME_REQUESTS = 'moneypadel_game_requests'; // shared: wishlist + upcoming games
 const STORAGE_KEY_DEV_AREAS = 'moneypadel_dev_areas'; // shared: freeform per-player development notes
+const STORAGE_KEY_CHALLENGES = 'moneypadel_challenges'; // shared: sequential turn-based match challenges (separate from gameRequestsState -- see buildCompleteMatchWithPartner/bridgeChallengeToRequest below for why)
 
 // Sections an admin can hide from non-admin viewers. Admins always see everything.
 const VISIBILITY_DEFAULTS = {
@@ -138,6 +139,28 @@ async function saveDevAreas(areas){
     await fsSet(STORAGE_KEY_DEV_AREAS, JSON.stringify(areas));
     return true;
   } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save dev areas failed', e); return false; }
+}
+
+// {id, createdAt, createdBy, challenger, challenged, firstPicker:'challenger'|'challenged',
+//  firstRestriction:'any'|'S'|'A'|'B'|'C', secondRestriction: same,
+//  firstPartner:null|name, secondPartner:null|name,
+//  state:'waiting_first_pick'|'waiting_second_pick'|'ready'|'confirmed'|'declined'|'cancelled',
+//  linkedRequestId:null|id, respondedAt:null|iso}
+// Deliberately its own store rather than folded into gameRequestsState -- see the
+// "Complete-match recommendations" / Challenge section below for the schema reasoning.
+// No rating/balance numbers are ever stored here -- the match % is always recomputed
+// live from current PLAYERS data, same as everywhere else in the app.
+let challengesState = [];
+
+async function loadChallenges(){
+  try { const v = await fsGet(STORAGE_KEY_CHALLENGES); if(v) return JSON.parse(v); } catch(e){ console.error('load challenges failed', e); }
+  return [];
+}
+async function saveChallenges(challenges){
+  try {
+    await fsSet(STORAGE_KEY_CHALLENGES, JSON.stringify(challenges));
+    return true;
+  } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save challenges failed', e); return false; }
 }
 
 async function loadStoredData(){
@@ -1533,6 +1556,31 @@ function h2hCount(a,b){ return H2H[[a,b].sort().join('|')] || 0; }
 let fgPlayer = null;
 let fgScope = 'tier';
 let fgDiff = 'easy';
+// Build a Match -- optional constraints layered on top of the same engine.
+// '' means "Anyone" (no constraint), matching the select's placeholder option.
+let fgPlayWith = '';
+let fgPlayAgainst = '';
+let fgBuildMatchOpen = false;
+
+// Populated fresh on every call (player/constraint selections change what's
+// valid to offer in the *other* two selects) -- cheap, ~40 players.
+function populateBuildMatchSelects(){
+  const withSel = document.getElementById('fgPlayWithSelect');
+  const againstSel = document.getElementById('fgPlayAgainstSelect');
+  if(!withSel || !againstSel) return;
+  const names = [...PLAYERS].map(p=>p.name).sort((a,b)=>a.localeCompare(b));
+
+  // Validation: the selected player can't appear in either list, and Play
+  // With / Play Against can't offer each other's current value -- never
+  // silently drop a constraint, just don't let an impossible one be picked.
+  const withOptions = names.filter(n=>n!==fgPlayer && n!==fgPlayAgainst);
+  const againstOptions = names.filter(n=>n!==fgPlayer && n!==fgPlayWith);
+  if(fgPlayWith && !withOptions.includes(fgPlayWith)) fgPlayWith = '';
+  if(fgPlayAgainst && !againstOptions.includes(fgPlayAgainst)) fgPlayAgainst = '';
+
+  withSel.innerHTML = `<option value="">Anyone</option>` + withOptions.map(n=>`<option value="${n}" ${n===fgPlayWith?'selected':''}>${n}</option>`).join('');
+  againstSel.innerHTML = `<option value="">Anyone</option>` + againstOptions.map(n=>`<option value="${n}" ${n===fgPlayAgainst?'selected':''}>${n}</option>`).join('');
+}
 
 function initFindGame(){
   const sel = document.getElementById('fgPlayerSelect');
@@ -1546,8 +1594,18 @@ function initFindGame(){
     });
     fgPlayer = sorted[0].name;
     sel.value = fgPlayer;
-    sel.addEventListener('change', e=>{ fgPlayer = e.target.value; renderFindGameResults(); });
+    sel.addEventListener('change', e=>{ fgPlayer = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
+
+    document.getElementById('buildMatchToggle').onclick = ()=>{
+      fgBuildMatchOpen = !fgBuildMatchOpen;
+      const panel = document.getElementById('buildMatchPanel');
+      panel.hidden = !fgBuildMatchOpen;
+      document.getElementById('buildMatchToggle').textContent = fgBuildMatchOpen ? 'Build a Match ‹' : 'Build a Match ›';
+    };
+    document.getElementById('fgPlayWithSelect').addEventListener('change', e=>{ fgPlayWith = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
+    document.getElementById('fgPlayAgainstSelect').addEventListener('change', e=>{ fgPlayAgainst = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
   }
+  populateBuildMatchSelects();
   document.querySelectorAll('#fgScopeToggle .fg-toggle-btn').forEach(b=>{
     b.onclick = ()=>{ fgScope = b.dataset.scope; document.querySelectorAll('#fgScopeToggle .fg-toggle-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderFindGameResults(); };
   });
@@ -1649,6 +1707,13 @@ function buildCompleteMatch(player, oppCandidate, scope){
   const ps = suggestPartnerForTarget(player, oppCandidate.avg, scope, oppCandidate.pair);
   if(!ps.closest) return null;
   const partner = PLAYERS.find(p=>p.name===ps.closest.name);
+  return buildCompleteMatchWithPartner(player, partner, oppCandidate);
+}
+
+// Same scoring/description logic as buildCompleteMatch, but for a partner
+// that's already fixed (Build a Match's "Play with", or a completed
+// Challenge) instead of one the engine chooses via suggestPartnerForTarget.
+function buildCompleteMatchWithPartner(player, partner, oppCandidate){
   const opponents = [PLAYERS.find(p=>p.name===oppCandidate.pair[0]), PLAYERS.find(p=>p.name===oppCandidate.pair[1])];
   if(!partner || !opponents[0] || !opponents[1]) return null;
 
@@ -1675,11 +1740,11 @@ function buildCompleteMatch(player, oppCandidate, scope){
   };
 }
 
-function buildFindGameRecommendations(player, scope, diff){
-  const candidates = generateCandidatePairs(player, scope, diff, 10);
-  const matches = candidates.map(c => buildCompleteMatch(player, c, scope)).filter(Boolean);
-  if(matches.length === 0) return null;
-
+// Operates on any already-built matches array (plain Find Game or a
+// constrained Build a Match run) -- purely a labeling pass over whatever
+// candidates were produced, so Build a Match gets the same Fresh/Proven/
+// Tougher treatment for free instead of a second, parallel implementation.
+function categorizeAlternatives(matches, diff){
   const best = matches[0];
   const rest = matches.slice(1);
   const used = new Set();
@@ -1711,7 +1776,40 @@ function buildFindGameRecommendations(player, scope, diff){
     }
   }
 
-  return { best, alternatives: alternatives.slice(0,3), all: matches };
+  return alternatives.slice(0,3);
+}
+
+// A candidate pool large enough to cover every possible pair among the
+// group (~40 players -> at most C(40,2)=780) -- used whenever a Build a
+// Match constraint needs to filter the *full* ranked candidate list rather
+// than just the first few, so a valid combination further down the gap-
+// ranking is never missed just because it wasn't in the usual top 10.
+const FG_ALL_CANDIDATES = 999;
+
+// Build a Match: 'playWith'/'playAgainst' are optional player names (empty
+// string = no constraint = identical output to plain Find Game). This is a
+// filtering layer in front of the same generateCandidatePairs ranking, not
+// a new matchmaking algorithm -- see the report note on where the
+// difficulty *target* still anchors when a partner is fixed.
+function buildFindGameRecommendations(player, scope, diff, playWith, playAgainst){
+  playWith = playWith || '';
+  playAgainst = playAgainst || '';
+
+  let candidates = generateCandidatePairs(player, scope, diff, FG_ALL_CANDIDATES);
+  if(playAgainst) candidates = candidates.filter(c => c.pair.includes(playAgainst));
+  if(playWith) candidates = candidates.filter(c => !c.pair.includes(playWith));
+  candidates = candidates.slice(0, 10);
+
+  let matches;
+  if(playWith){
+    const partner = PLAYERS.find(p=>p.name===playWith);
+    matches = candidates.map(c => buildCompleteMatchWithPartner(player, partner, c)).filter(Boolean);
+  } else {
+    matches = candidates.map(c => buildCompleteMatch(player, c, scope)).filter(Boolean);
+  }
+  if(matches.length === 0) return null;
+
+  return { best: matches[0], alternatives: categorizeAlternatives(matches, diff), all: matches };
 }
 
 function pmInitials(name){
@@ -1732,13 +1830,13 @@ function renderMatchTeams(m){
   </div>`;
 }
 
-function renderBestMatchCard(m){
+function renderBestMatchCard(m, label){
   const tierNote = m.tiers[0]===m.tiers[1] ? `Tier ${m.tiers[0]}` : `Tier ${m.tiers[0]} &amp; Tier ${m.tiers[1]}`;
   const partnershipLine = m.partnership
     ? `${m.player.name} &amp; ${m.partner.name}: ${m.partnership.games} games together, ${m.partnership.wins}-${m.partnership.losses} (${m.partnership.winpct}%)`
     : `${m.player.name} and ${m.partner.name} haven't built up a partnership record together yet.`;
   return `<div class="pm-best mp-card-prestige">
-    <div class="pm-best-label">Best Match</div>
+    <div class="pm-best-label">${label || 'Best Match'}</div>
     <div class="pm-best-pct">${m.pctFor}% – ${m.pctAgainst}%</div>
     <div class="pm-best-balance">${m.balanceDesc}</div>
     ${renderMatchTeams(m)}
@@ -1801,18 +1899,30 @@ function navigateToWishlistForMatch(m){
   }
 }
 
+// Never a generic "no results" when a Build a Match constraint is active --
+// names the specific constraint so the user knows it was honored, not
+// silently dropped, per the impossible-combination requirement.
+function buildConstraintEmptyMessage(scope, playWith, playAgainst){
+  const scopeNote = scope==='tier' ? 'within your tier' : 'across any tier';
+  if(playWith && playAgainst) return `No valid match ${scopeNote} with ${playWith} as your partner and ${playAgainst} on the other side — try "Any tier" or a different pairing.`;
+  if(playAgainst) return `No opponent pairing ${scopeNote} has ${playAgainst} on the other side — try "Any tier".`;
+  if(playWith) return `No opponent pairing ${scopeNote} works with ${playWith} as your partner — try "Any tier".`;
+  return `Not enough other players in this scope to suggest a full match — try "Any tier".`;
+}
+
 function renderFindGameResults(){
   const player = PLAYERS.find(p=>p.name===fgPlayer);
   if(!player) return;
   const box = document.getElementById('fgResults');
-  const recs = buildFindGameRecommendations(player, fgScope, fgDiff);
+  const recs = buildFindGameRecommendations(player, fgScope, fgDiff, fgPlayWith, fgPlayAgainst);
 
   if(!recs){
-    box.innerHTML = `<div class="section-sub" style="margin-top:6px;">Not enough other players in this scope to suggest a full match — try "Any tier".</div>`;
+    box.innerHTML = `<div class="section-sub" style="margin-top:6px;">${buildConstraintEmptyMessage(fgScope, fgPlayWith, fgPlayAgainst)}</div>`;
     return;
   }
 
-  let html = renderBestMatchCard(recs.best);
+  const constrained = fgPlayWith || fgPlayAgainst;
+  let html = renderBestMatchCard(recs.best, constrained ? 'Your Match' : 'Best Match');
   if(recs.alternatives.length){
     html += `<div class="pm-alt-heading">Alternatives</div>`;
     recs.alternatives.forEach((alt,i)=>{ html += renderAltCard(alt, i); });
@@ -1849,6 +1959,372 @@ function renderFindGameResults(){
 function renderFindGame(){
   initFindGame();
   renderFindGameResults();
+}
+
+// ===== Challenge (sequential turn-based match construction) =====
+// A small state machine, not a pile of booleans:
+//   waiting_first_pick -> waiting_second_pick -> ready -> confirmed
+//                      \_______________________/
+//                       -> declined / cancelled (either waiting_* state)
+// "draft" (the creation form, before Send Challenge) is local UI state only
+// -- nothing is persisted until a challenge is actually sent.
+//
+// Stored under its own Firestore-backed key (challengesState /
+// STORAGE_KEY_CHALLENGES, see above) rather than folded into
+// gameRequestsState -- that store's shape (a fixed 4 named players +
+// per-player confirmations) has no room for "only 2 of 4 players are known
+// yet" or turn order without turning every request-reading function
+// polymorphic. Once both picks are in, bridgeChallengeToRequest() hands off
+// to that exact existing mechanism instead of inventing a parallel one.
+//
+// IDENTITY NOTE: there is no real login. getCurrentViewer() (presentation
+// identity only, per its own doc comment in shell.js) decides which action
+// buttons to *show* a given browser -- it is never treated as proof of who
+// is actually acting, and nothing here touches the real admin/password
+// boundary (isUnlocked). Anyone could open devtools and click a hidden
+// button; this is the same trust model the rest of the app already uses
+// for e.g. match edits and dev-area notes.
+const CHALLENGE_RESTRICTIONS = ['any', ...TIER_ORDER_LIST]; // 'any' | 'S' | 'A' | 'B' | 'C'
+function challengeRestrictionLabel(r){ return r==='any' ? 'Any player' : `Tier ${r}`; }
+// Mid-sentence form -- "Tier B" keeps its capital, "any player" doesn't
+// stay capitalized just because it happens to start the standalone label.
+function challengeRestrictionLabelInline(r){ return r==='any' ? 'any player' : `Tier ${r}`; }
+
+function challengeFirstAnchor(ch){ return ch.firstPicker==='challenger' ? ch.challenger : ch.challenged; }
+function challengeSecondAnchor(ch){ return ch.firstPicker==='challenger' ? ch.challenged : ch.challenger; }
+
+// Who a given pick may choose from: both anchors and (for the second pick)
+// the already-chosen first partner are always excluded -- no duplicate
+// player can ever reach the final four -- filtered by that pick's tier
+// restriction and by the same inactive-player rule every other matchmaking
+// path in this app already uses.
+function challengeCandidatePool(ch, restriction, extraExclude){
+  const excluded = new Set([ch.challenger, ch.challenged, ...(extraExclude || [])]);
+  return PLAYERS.filter(p => !excluded.has(p.name) && !INACTIVE_PLAYERS.has(p.name) && (restriction==='any' || p.tier===restriction));
+}
+
+function challengeFinalPlayers(ch){
+  if(ch.state!=='ready' && ch.state!=='confirmed') return null;
+  const partnerOf = {};
+  partnerOf[challengeFirstAnchor(ch)] = ch.firstPartner;
+  partnerOf[challengeSecondAnchor(ch)] = ch.secondPartner;
+  return [ch.challenger, partnerOf[ch.challenger], ch.challenged, partnerOf[ch.challenged]];
+}
+
+// Recomputes the finished match's display live from current PLAYERS data --
+// reuses buildCompleteMatchWithPartner exactly as Build a Match does (see
+// above), so a completed Challenge renders with the identical card language
+// and the identical Elo expected-score formula. Nothing here is persisted.
+function challengeToMatchView(ch){
+  const players = challengeFinalPlayers(ch);
+  if(!players || players.some(p=>!p)) return null;
+  const challenger = PLAYERS.find(p=>p.name===ch.challenger);
+  const challenged = PLAYERS.find(p=>p.name===ch.challenged);
+  const firstAnchor = challengeFirstAnchor(ch);
+  const challengerPartner = PLAYERS.find(p=>p.name === (firstAnchor===ch.challenger ? ch.firstPartner : ch.secondPartner));
+  const challengedPartner = PLAYERS.find(p=>p.name === (firstAnchor===ch.challenged ? ch.firstPartner : ch.secondPartner));
+  if(!challenger || !challenged || !challengerPartner || !challengedPartner) return null;
+  return buildCompleteMatchWithPartner(challenger, challengerPartner, {
+    pair: [challenged.name, challengedPartner.name],
+    tiers: [challenged.tier, challengedPartner.tier],
+    avg: (challenged.rating + challengedPartner.rating) / 2,
+    played_p: h2hCount(challenger.name, challenged.name),
+    played_q: h2hCount(challenger.name, challengedPartner.name),
+    gap: 0,
+  });
+}
+
+function createChallenge(challenger, challenged, firstPicker, firstRestriction, secondRestriction, createdBy){
+  return {
+    id: 'chl_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
+    createdAt: new Date().toISOString(), createdBy,
+    challenger, challenged, firstPicker, firstRestriction, secondRestriction,
+    firstPartner: null, secondPartner: null,
+    state: 'waiting_first_pick', linkedRequestId: null, respondedAt: null,
+  };
+}
+
+async function makeFirstPick(ch, partnerName){
+  if(ch.state !== 'waiting_first_pick') return false;
+  if(!challengeCandidatePool(ch, ch.firstRestriction, []).find(p=>p.name===partnerName)) return false; // enforced, not just displayed
+  const prevState = ch.state;
+  ch.firstPartner = partnerName;
+  ch.state = 'waiting_second_pick';
+  const ok = await saveChallenges(challengesState);
+  if(!ok){ ch.firstPartner = null; ch.state = prevState; }
+  return ok;
+}
+
+async function makeSecondPick(ch, partnerName){
+  if(ch.state !== 'waiting_second_pick') return false;
+  if(!challengeCandidatePool(ch, ch.secondRestriction, [ch.firstPartner]).find(p=>p.name===partnerName)) return false;
+  const prevState = ch.state;
+  ch.secondPartner = partnerName;
+  ch.state = 'ready';
+  const ok = await saveChallenges(challengesState);
+  if(!ok){ ch.secondPartner = null; ch.state = prevState; return false; }
+  await bridgeChallengeToRequest(ch);
+  return true;
+}
+
+// Once both picks are in, the challenge hands off entirely to the existing
+// request/confirmation mechanics: the two anchors are auto-confirmed (they
+// each made a deliberate, active choice to get here), but the two drafted
+// partners still confirm themselves from their own profile, same as any
+// ordinary Wishlist request -- nobody is silently committed to a match they
+// didn't agree to. Safe to retry: only pushes a request once linkedRequestId
+// is actually set.
+async function bridgeChallengeToRequest(ch){
+  if(ch.linkedRequestId) return true;
+  const players = challengeFinalPlayers(ch);
+  if(!players || players.some(p=>!p)) return false;
+  const confirmations = {};
+  players.forEach(n=> confirmations[n] = false);
+  confirmations[ch.challenger] = true;
+  confirmations[ch.challenged] = true;
+  const req = {
+    id: 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
+    requestedBy: ch.createdBy || ch.challenger,
+    requestedAt: new Date().toISOString(),
+    players, preferredDate: '',
+    confirmations,
+    status: Object.values(confirmations).every(v=>v) ? 'confirmed' : 'pending',
+  };
+  gameRequestsState.push(req);
+  const ok = await saveGameRequests(gameRequestsState);
+  if(!ok){ gameRequestsState.pop(); return false; }
+  ch.state = 'confirmed';
+  ch.linkedRequestId = req.id;
+  return await saveChallenges(challengesState);
+}
+
+async function declineChallenge(ch){
+  if(ch.state!=='waiting_first_pick' && ch.state!=='waiting_second_pick') return false;
+  const prevState = ch.state;
+  ch.state = 'declined';
+  ch.respondedAt = new Date().toISOString();
+  const ok = await saveChallenges(challengesState);
+  if(!ok) ch.state = prevState;
+  return ok;
+}
+
+async function cancelChallenge(ch){
+  if(ch.state!=='waiting_first_pick' && ch.state!=='waiting_second_pick') return false;
+  const prevState = ch.state;
+  ch.state = 'cancelled';
+  ch.respondedAt = new Date().toISOString();
+  const ok = await saveChallenges(challengesState);
+  if(!ok) ch.state = prevState;
+  return ok;
+}
+
+let chlCreateOpen = false;
+
+function renderChallengeCreateForm(){
+  const names = allPlayerNames();
+  const nameOptions = `<option value="">Choose player</option>` + names.map(n=>`<option value="${n}">${n}</option>`).join('');
+  const restrictionOptions = CHALLENGE_RESTRICTIONS.map(r=>`<option value="${r}">${challengeRestrictionLabel(r)}</option>`).join('');
+  return `<div class="chl-create-card">
+    <div class="chl-create-title">Create Challenge</div>
+    <div class="fg-row"><label class="fg-label">Challenger</label><select id="chlChallenger" class="fg-select">${nameOptions}</select></div>
+    <div class="fg-row"><label class="fg-label">Challenging</label><select id="chlChallenged" class="fg-select">${nameOptions}</select></div>
+    <div class="fg-row"><label class="fg-label">Who picks first</label>
+      <div class="fg-toggle" id="chlFirstPickerToggle">
+        <button class="fg-toggle-btn active" data-picker="challenger">Challenger</button>
+        <button class="fg-toggle-btn" data-picker="challenged">Challenged</button>
+      </div>
+    </div>
+    <div class="chl-picker-row fg-row">
+      <div><label class="fg-label">First pick restriction</label><select id="chlFirstRestriction" class="fg-select">${restrictionOptions}</select></div>
+      <div><label class="fg-label">Second pick restriction</label><select id="chlSecondRestriction" class="fg-select">${restrictionOptions}</select></div>
+    </div>
+    <div id="chlCreateMessage" class="section-sub"></div>
+    <div class="fg-row"><button class="mp-btn-primary" id="chlCreateSubmit" style="width:100%;">Send Challenge</button></div>
+  </div>`;
+}
+
+function renderChallengeCard(ch, viewer){
+  const viewerName = viewer ? viewer.name : null;
+  const firstAnchor = challengeFirstAnchor(ch);
+  const secondAnchor = challengeSecondAnchor(ch);
+
+  if(ch.state === 'declined' || ch.state === 'cancelled'){
+    const label = ch.state === 'declined' ? 'Declined' : 'Cancelled';
+    return `<div class="chl-card chl-muted">
+      <div class="chl-tag">Challenge</div>
+      <div class="chl-matchup-line">${ch.challenger} vs ${ch.challenged}</div>
+      <div class="chl-status-row"><span class="chl-status-badge chl-${ch.state}">${label}</span></div>
+    </div>`;
+  }
+
+  if(ch.state === 'waiting_first_pick' || ch.state === 'waiting_second_pick'){
+    const isFirst = ch.state === 'waiting_first_pick';
+    const activePicker = isFirst ? firstAnchor : secondAnchor;
+    const restriction = isFirst ? ch.firstRestriction : ch.secondRestriction;
+    const isViewersTurn = viewerName === activePicker;
+    const canDecline = viewerName === ch.challenged;
+    const canCancel = viewerName === ch.createdBy;
+
+    const priorPickLine = !isFirst
+      ? `<div class="chl-restriction-line">${firstAnchor} chose <b style="color:var(--text);">${ch.firstPartner}</b>.</div>` : '';
+
+    // The challenged player can decline any time before the match is ready
+    // -- regardless of whose turn it is, including their own -- so this is
+    // built once and dropped into whichever actions row actually renders.
+    const cancelBtn = canCancel ? `<button class="mp-btn-secondary chl-cancel-btn" data-challenge-id="${ch.id}">Cancel Challenge</button>` : '';
+    const declineBtn = canDecline ? `<button class="mp-btn-secondary chl-decline-btn" data-challenge-id="${ch.id}">Decline</button>` : '';
+
+    let pickPanel = '';
+    if(isViewersTurn){
+      const pool = challengeCandidatePool(ch, restriction, isFirst ? [] : [ch.firstPartner]).sort((a,b)=>a.name.localeCompare(b.name));
+      if(pool.length === 0){
+        pickPanel = `<div class="chl-pick-panel">
+          <div class="chl-pick-empty">No eligible ${challengeRestrictionLabelInline(restriction)} left to pick — this challenge can't be completed as set up.</div>
+          ${(cancelBtn || declineBtn) ? `<div class="chl-actions">${cancelBtn}${declineBtn}</div>` : ''}
+        </div>`;
+      } else {
+        pickPanel = `<div class="chl-pick-panel">
+          <select class="fg-select chl-partner-select" id="chlPartnerSelect-${ch.id}">${pool.map(p=>`<option value="${p.name}">${p.name} (Tier ${p.tier})</option>`).join('')}</select>
+          <div class="chl-actions">
+            <button class="mp-btn-primary chl-choose-btn" data-challenge-id="${ch.id}">Choose Partner</button>
+            ${cancelBtn}${declineBtn}
+          </div>
+        </div>`;
+      }
+    } else if(cancelBtn || declineBtn){
+      pickPanel = `<div class="chl-actions">${cancelBtn}${declineBtn}</div>`;
+    }
+
+    const badge = isViewersTurn
+      ? `<span class="chl-status-badge chl-your-turn">Your turn</span>`
+      : `<span class="chl-status-badge">Waiting for ${activePicker}</span>`;
+
+    return `<div class="chl-card">
+      <div class="chl-tag">Challenge</div>
+      <div class="chl-matchup-line">${ch.challenger} vs ${ch.challenged}</div>
+      <div class="chl-restriction-line">${activePicker} picks ${isFirst?'first':'second'} — partner must be ${challengeRestrictionLabelInline(restriction)}.</div>
+      ${priorPickLine}
+      <div class="chl-status-row">${badge}</div>
+      ${pickPanel}
+    </div>`;
+  }
+
+  // 'ready' (mid-bridge / bridge failed) or 'confirmed' -- show the finished
+  // match with the same card language as Build a Match, plus the real
+  // confirmation state of the request it was bridged into.
+  const mv = challengeToMatchView(ch);
+  if(!mv){
+    return `<div class="chl-card"><div class="chl-tag">Challenge</div><div class="chl-matchup-line">${ch.challenger} vs ${ch.challenged}</div><div class="chl-restriction-line">Match ready, but a chosen player is no longer available to display.</div></div>`;
+  }
+  const linkedReq = ch.linkedRequestId ? gameRequestsState.find(r=>r.id===ch.linkedRequestId) : null;
+  return `<div class="chl-card">
+    <div class="chl-tag">Challenge · Match ready</div>
+    ${renderMatchTeams(mv)}
+    <div class="pm-best-pct" style="margin-top:8px;">${mv.pctFor}% – ${mv.pctAgainst}%</div>
+    <div class="pm-best-balance">${mv.balanceDesc}</div>
+    ${linkedReq
+      ? fmtRequestConfirmations(linkedReq)
+      : `<div class="chl-restriction-line chl-ready">Couldn't finalize this into a request.</div><div class="chl-actions"><button class="mp-btn-primary chl-retry-bridge-btn" data-challenge-id="${ch.id}">Retry</button></div>`}
+  </div>`;
+}
+
+function renderChallengesSection(){
+  const viewer = getCurrentViewer();
+  const active = challengesState.filter(c => c.state!=='confirmed').slice().sort((a,b)=> a.createdAt < b.createdAt ? 1 : -1);
+
+  let html = `<div class="section-heading" style="margin-top:2px;">Challenges</div>`;
+  html += `<div class="section-sub">Call someone out — one side picks a partner first, then the other responds.</div>`;
+  html += chlCreateOpen ? renderChallengeCreateForm() : `<button class="chl-create-toggle" id="chlOpenCreate">+ Create Challenge</button>`;
+
+  if(active.length === 0){
+    html += `<div class="section-sub">No open challenges right now.</div>`;
+  } else {
+    active.forEach(ch=>{ html += renderChallengeCard(ch, viewer); });
+  }
+  return html;
+}
+
+// Wires everything renderChallengesSection() just put into `box` -- called
+// from renderWishlist() right after it sets box.innerHTML, alongside that
+// function's own wiring for the legacy request form.
+function wireChallengeControls(box, flashMessage, adminFlashMessage){
+  const openBtn = document.getElementById('chlOpenCreate');
+  if(openBtn) openBtn.onclick = ()=>{ chlCreateOpen = true; renderWishlist(flashMessage, adminFlashMessage); };
+
+  const firstPickerToggle = document.getElementById('chlFirstPickerToggle');
+  if(firstPickerToggle){
+    firstPickerToggle.querySelectorAll('.fg-toggle-btn').forEach(b=>{
+      b.onclick = ()=>{ firstPickerToggle.querySelectorAll('.fg-toggle-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); };
+    });
+  }
+
+  const chlSubmit = document.getElementById('chlCreateSubmit');
+  if(chlSubmit){
+    chlSubmit.onclick = async ()=>{
+      const msg = document.getElementById('chlCreateMessage');
+      const challenger = document.getElementById('chlChallenger').value;
+      const challenged = document.getElementById('chlChallenged').value;
+      if(!challenger || !challenged){ msg.textContent = 'Choose both players.'; return; }
+      if(challenger === challenged){ msg.textContent = 'Challenger and challenged must be different players.'; return; }
+      const firstPickerBtn = document.querySelector('#chlFirstPickerToggle .fg-toggle-btn.active');
+      const firstPicker = firstPickerBtn ? firstPickerBtn.dataset.picker : 'challenger';
+      const firstRestriction = document.getElementById('chlFirstRestriction').value;
+      const secondRestriction = document.getElementById('chlSecondRestriction').value;
+      // createdBy is compared against getCurrentViewer() (see canCancel below),
+      // so it must be recorded from that same identity source -- currentUserName
+      // is a separate, free-text field (the legacy request form's "Requested
+      // by") and comparing one against the other would silently break Cancel.
+      const viewerNow = getCurrentViewer();
+      const createdBy = (viewerNow ? viewerNow.name : currentUserName) || challenger;
+      const ch = createChallenge(challenger, challenged, firstPicker, firstRestriction, secondRestriction, createdBy);
+      challengesState.push(ch);
+      const ok = await saveChallenges(challengesState);
+      if(!ok){
+        challengesState.pop();
+        msg.textContent = storageAvailable() ? `Save failed (${lastStorageError || 'unknown error'}) — try again.` : `Save failed — this page can't reach shared storage.`;
+        return;
+      }
+      chlCreateOpen = false;
+      renderWishlist('Challenge sent!');
+    };
+  }
+
+  box.querySelectorAll('.chl-choose-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = challengesState.find(c=>c.id===btn.dataset.challengeId);
+      if(!ch) return;
+      const sel = document.getElementById('chlPartnerSelect-'+ch.id);
+      const partnerName = sel ? sel.value : '';
+      if(!partnerName) return;
+      if(ch.state === 'waiting_first_pick') await makeFirstPick(ch, partnerName);
+      else await makeSecondPick(ch, partnerName);
+      renderWishlist(flashMessage, adminFlashMessage);
+    };
+  });
+  box.querySelectorAll('.chl-decline-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = challengesState.find(c=>c.id===btn.dataset.challengeId);
+      if(!ch) return;
+      await declineChallenge(ch);
+      renderWishlist(flashMessage, adminFlashMessage);
+    };
+  });
+  box.querySelectorAll('.chl-cancel-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = challengesState.find(c=>c.id===btn.dataset.challengeId);
+      if(!ch) return;
+      await cancelChallenge(ch);
+      renderWishlist(flashMessage, adminFlashMessage);
+    };
+  });
+  box.querySelectorAll('.chl-retry-bridge-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = challengesState.find(c=>c.id===btn.dataset.challengeId);
+      if(!ch) return;
+      await bridgeChallengeToRequest(ch);
+      renderWishlist(flashMessage, adminFlashMessage);
+    };
+  });
 }
 
 function buildCallOutSection(name){
@@ -3260,7 +3736,9 @@ function renderWishlist(flashMessage, adminFlashMessage){
   const box = document.getElementById('wishlistView');
   const pending = gameRequestsState.filter(r=>r.status==='pending');
 
-  let html = `<div class="section-heading">🙋 Request a game</div>`;
+  let html = renderChallengesSection();
+  html += `<div class="mp-divider"></div>`;
+  html += `<div class="section-heading" style="margin-top:2px;">🙋 Request a game</div>`;
   html += `<div class="section-sub">Name four players. Once all four confirm from their own profile, it moves to Upcoming automatically.</div>`;
   html += `<div class="fg-controls">
     <div class="fg-row"><label class="fg-label">Requested by</label>
@@ -3305,6 +3783,7 @@ function renderWishlist(flashMessage, adminFlashMessage){
 
   box.innerHTML = html;
   wireRequestPlayerLinks(box);
+  wireChallengeControls(box, flashMessage, adminFlashMessage);
 
   document.getElementById('reqYourName').addEventListener('change', e=>{
     currentUserName = e.target.value.trim();
@@ -4281,9 +4760,17 @@ async function init(){
   visibilityState = await loadVisibility();
   gameRequestsState = await loadGameRequests();
   devAreasState = await loadDevAreas();
+  challengesState = await loadChallenges();
   recomputeAll();
   applyTabVisibility();
   render();
 }
 
 init();
+
+// Re-render the Requests tab live on a viewer switch, so "Your turn" /
+// "Choose Partner" moves to whichever challenge card it now applies to
+// without needing a manual tab reload.
+document.addEventListener('viewerchanged', ()=>{
+  if(activeTab === 'wishlist') renderWishlist();
+});
