@@ -1648,6 +1648,13 @@ function wirePlayersControls(){
 function h2hCount(a,b){ return H2H[[a,b].sort().join('|')] || 0; }
 
 let fgPlayer = null;
+// True once the user has deliberately picked someone other than the
+// app-wide selected player to find a game on their behalf -- while true,
+// a global player switch (viewerchanged) leaves fgPlayer alone rather than
+// stomping that deliberate choice. Cleared again the moment they pick the
+// viewer's own name back, which is what lets a global switch resume
+// syncing -- see syncFindGamePlayerToViewer below.
+let fgPlayerIsOverride = false;
 let fgScope = 'tier';
 let fgDiff = 'easy';
 // Build a Match -- optional constraints layered on top of the same engine.
@@ -1686,9 +1693,19 @@ function initFindGame(){
       opt.textContent = `${p.name} (Tier ${p.tier})`;
       sel.appendChild(opt);
     });
-    fgPlayer = sorted[0].name;
-    sel.value = fgPlayer;
-    sel.addEventListener('change', e=>{ fgPlayer = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
+    // Initialise from the app-wide selected player (the same identity Home
+    // and Player Profile use) rather than an arbitrary default -- falls
+    // back to the alphabetically-first player only if nobody's selected one.
+    const viewer = getCurrentViewer();
+    fgPlayer = (viewer && PLAYERS.find(p=>p.name===viewer.name)) ? viewer.name : sorted[0].name;
+    sel.addEventListener('change', e=>{
+      fgPlayer = e.target.value;
+      const v = getCurrentViewer();
+      // Picking the viewer's own name back "resets" -- future global player
+      // switches resume syncing here again.
+      fgPlayerIsOverride = !v || fgPlayer !== v.name;
+      populateBuildMatchSelects(); renderFindGameResults();
+    });
 
     document.getElementById('buildMatchToggle').onclick = ()=>{
       fgBuildMatchOpen = !fgBuildMatchOpen;
@@ -1699,6 +1716,10 @@ function initFindGame(){
     document.getElementById('fgPlayWithSelect').addEventListener('change', e=>{ fgPlayWith = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
     document.getElementById('fgPlayAgainstSelect').addEventListener('change', e=>{ fgPlayAgainst = e.target.value; populateBuildMatchSelects(); renderFindGameResults(); });
   }
+  // Always reflects current fgPlayer, however it was last set (deliberate
+  // pick, or a sync from a global player switch that happened while this
+  // tab wasn't even open) -- see syncFindGamePlayerToViewer.
+  sel.value = fgPlayer;
   populateBuildMatchSelects();
   document.querySelectorAll('#fgScopeToggle .fg-toggle-btn').forEach(b=>{
     b.onclick = ()=>{ fgScope = b.dataset.scope; document.querySelectorAll('#fgScopeToggle .fg-toggle-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderFindGameResults(); };
@@ -1706,6 +1727,23 @@ function initFindGame(){
   document.querySelectorAll('#fgDiffToggle .fg-toggle-btn').forEach(b=>{
     b.onclick = ()=>{ fgDiff = b.dataset.diff; document.querySelectorAll('#fgDiffToggle .fg-toggle-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderFindGameResults(); };
   });
+}
+
+// Keeps Find Game's Player field aligned with the app-wide selected player
+// on a global switch (Home's player picker), unless the user has
+// deliberately chosen someone else here to find a game on their behalf
+// (fgPlayerIsOverride -- cleared again if they pick the viewer's own name
+// back). Safe to call even when Find Game isn't the active tab/isn't
+// mounted yet; initFindGame() re-applies fgPlayer to the select next time
+// it actually renders.
+function syncFindGamePlayerToViewer(){
+  if(fgPlayerIsOverride) return;
+  const viewer = getCurrentViewer();
+  if(!viewer || !PLAYERS.find(p=>p.name===viewer.name) || fgPlayer === viewer.name) return;
+  fgPlayer = viewer.name;
+  const sel = document.getElementById('fgPlayerSelect');
+  if(sel && sel.options.length){ sel.value = fgPlayer; populateBuildMatchSelects(); }
+  if(activeTab === 'findgame') renderFindGameResults();
 }
 
 function generateCandidatePairs(player, scope, diff, topN){
@@ -2216,12 +2254,16 @@ let chlCreateOpen = false;
 
 function renderChallengeCreateForm(){
   const names = allPlayerNames();
-  const nameOptions = `<option value="">Choose player</option>` + names.map(n=>`<option value="${n}">${n}</option>`).join('');
+  const nameOptions = (selected) => `<option value="">Choose player</option>` + names.map(n=>`<option value="${n}" ${n===selected?'selected':''}>${n}</option>`).join('');
   const restrictionOptions = CHALLENGE_RESTRICTIONS.map(r=>`<option value="${r}">${challengeRestrictionLabel(r)}</option>`).join('');
+  // Challenger defaults to the app-wide selected player -- same identity
+  // Find Game and Home use -- since that's who's most likely creating this.
+  const viewer = getCurrentViewer();
+  const defaultChallenger = (viewer && names.includes(viewer.name)) ? viewer.name : '';
   return `<div class="chl-create-card">
     <div class="chl-create-title">Create Challenge</div>
-    <div class="fg-row"><label class="fg-label">Challenger</label><select id="chlChallenger" class="fg-select">${nameOptions}</select></div>
-    <div class="fg-row"><label class="fg-label">Challenging</label><select id="chlChallenged" class="fg-select">${nameOptions}</select></div>
+    <div class="fg-row"><label class="fg-label">Challenger</label><select id="chlChallenger" class="fg-select">${nameOptions(defaultChallenger)}</select></div>
+    <div class="fg-row"><label class="fg-label">Challenging</label><select id="chlChallenged" class="fg-select">${nameOptions('')}</select></div>
     <div class="fg-row"><label class="fg-label">Who picks first</label>
       <div class="fg-toggle" id="chlFirstPickerToggle">
         <button class="fg-toggle-btn active" data-picker="challenger">Challenger</button>
@@ -2322,9 +2364,24 @@ function renderChallengeCard(ch, viewer){
   </div>`;
 }
 
+// Higher = more relevant to this viewer: their own turn first, then any
+// challenge they're actually part of, then everything else -- so the
+// global player context decides what surfaces first here too, not just
+// who can act on a given card.
+function challengeRelevanceScore(ch, viewer){
+  if(!viewer) return 0;
+  const name = viewer.name;
+  const isYourTurn = (ch.state==='waiting_first_pick' && challengeFirstAnchor(ch)===name)
+    || (ch.state==='waiting_second_pick' && challengeSecondAnchor(ch)===name);
+  if(isYourTurn) return 2;
+  if(ch.challenger===name || ch.challenged===name) return 1;
+  return 0;
+}
+
 function renderChallengesSection(){
   const viewer = getCurrentViewer();
-  const active = challengesState.filter(c => c.state!=='confirmed').slice().sort((a,b)=> a.createdAt < b.createdAt ? 1 : -1);
+  const active = challengesState.filter(c => c.state!=='confirmed').slice().sort((a,b)=>
+    challengeRelevanceScore(b, viewer) - challengeRelevanceScore(a, viewer) || (a.createdAt < b.createdAt ? 1 : -1));
 
   let html = `<div class="section-heading" style="margin-top:2px;">Challenges</div>`;
   html += `<div class="section-sub">Call someone out — one side picks a partner first, then the other responds.</div>`;
@@ -3826,8 +3883,17 @@ function wireRequestPlayerLinks(box){
   });
 }
 
+// Same relevance idea as challengeRelevanceScore: a request needing this
+// viewer's own confirmation surfaces first, then any request they're
+// otherwise named in, then everything else.
+function requestRelevanceScore(req, viewer){
+  if(!viewer || !req.players.includes(viewer.name)) return 0;
+  return req.confirmations[viewer.name] ? 1 : 2;
+}
+
 function renderWishlist(flashMessage, adminFlashMessage){
   const box = document.getElementById('wishlistView');
+  const viewer = getCurrentViewer();
   const pending = gameRequestsState.filter(r=>r.status==='pending');
 
   let html = renderChallengesSection();
@@ -3870,7 +3936,9 @@ function renderWishlist(flashMessage, adminFlashMessage){
   if(pending.length === 0){
     html += `<div class="section-sub">No open requests right now.</div>`;
   } else {
-    pending.slice().sort((a,b)=> a.requestedAt < b.requestedAt ? 1 : -1).forEach(req=>{
+    pending.slice().sort((a,b)=>
+      requestRelevanceScore(b, viewer) - requestRelevanceScore(a, viewer) || (a.requestedAt < b.requestedAt ? 1 : -1)
+    ).forEach(req=>{
       html += buildRequestCardHtml(req, true, false);
     });
   }
@@ -4865,7 +4933,9 @@ init();
 
 // Re-render the Requests tab live on a viewer switch, so "Your turn" /
 // "Choose Partner" moves to whichever challenge card it now applies to
-// without needing a manual tab reload.
+// without needing a manual tab reload. Also keeps Find Game's Player field
+// aligned with the same global identity (see syncFindGamePlayerToViewer).
 document.addEventListener('viewerchanged', ()=>{
   if(activeTab === 'wishlist') renderWishlist();
+  syncFindGamePlayerToViewer();
 });
