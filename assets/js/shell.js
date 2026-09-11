@@ -14,9 +14,9 @@ const SECTION_TAB_MAP = { home: 'summary' };
 // correction. First entry in each list is that section's default landing tab.
 const SECTION_SUBNAV = {
   rankings: [
-    { tab: 'power', label: 'Power Rankings', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 20v-6"/><path d="M12 20V8"/><path d="M18 20v-10"/><path d="M4 20h16"/></svg>' },
-    { tab: 'wl', label: 'Win / Loss', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 3.2"/></svg>' },
-    { tab: 'summary', label: 'Monthly Summary', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="15" rx="1.5"/><path d="M4 9h16"/><path d="M8 4.5v-1.5"/><path d="M16 4.5v-1.5"/></svg>' },
+    { tab: 'power', label: 'Power', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 20v-6"/><path d="M12 20V8"/><path d="M18 20v-10"/><path d="M4 20h16"/></svg>' },
+    { tab: 'wl', label: 'W/L', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 3.2"/></svg>' },
+    { tab: 'summary', label: 'League', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="15" rx="1.5"/><path d="M4 9h16"/><path d="M8 4.5v-1.5"/><path d="M16 4.5v-1.5"/></svg>' },
   ],
   play: [
     { tab: 'findgame', label: 'Find Game' },

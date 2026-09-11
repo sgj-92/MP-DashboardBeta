@@ -4120,6 +4120,12 @@ let leagueGrouped = true;
 let leagueSortKey = 'points';
 let leagueSortDesc = true;
 
+// Order matters here: the league-calculation fields (P/W/L/D/GD/Pts) come
+// first so they're what's visible in an iPhone-width viewport without
+// scrolling; Avg Opp/Form are supporting context, not part of the points
+// calculation, and deliberately sit last so they're what overflows (behind
+// a subtle divider -- see .league-context-col in app.css) if anything has
+// to.
 const LEAGUE_COLUMNS = [
   { key: null, label: '#', align: 'left' },
   { key: 'name', label: 'Player', align: 'left' },
@@ -4128,9 +4134,9 @@ const LEAGUE_COLUMNS = [
   { key: 'losses', label: 'L', align: 'center' },
   { key: 'draws', label: 'D', align: 'center' },
   { key: 'gd', label: 'GD', align: 'center' },
+  { key: 'points', label: 'Pts', align: 'right' },
   { key: 'avg_opp', label: 'Avg Opp', align: 'center' },
   { key: 'recent_form', label: 'Form (10g)', align: 'center' },
-  { key: 'points', label: 'Pts', align: 'right' },
 ];
 
 function sortLeagueRows(rows){
@@ -4155,10 +4161,16 @@ function buildLeagueTableHtml(rows, showTierColumn){
   html += `<th style="padding:7px 4px 7px 8px;">#</th>`;
   html += `<th class="league-sort-th" data-key="name" style="padding:7px 4px; cursor:pointer;">Player${leagueSortKey==='name'?(leagueSortDesc?' ▾':' ▴'):''}</th>`;
   if(showTierColumn) html += `<th style="padding:7px 4px; text-align:center;">Tier</th>`;
-  ['games','wins','losses','draws','gd','avg_opp','recent_form','points'].forEach(key=>{
+  // Core league-calculation columns first (what an iPhone-width viewport
+  // needs to show without scrolling); avg_opp/recent_form are supporting
+  // context, not part of the points calculation, so they come last, and
+  // avg_opp gets the separator marking where "the table" ends and
+  // "context" begins -- see .league-context-col in app.css.
+  ['games','wins','losses','draws','gd','points','avg_opp','recent_form'].forEach(key=>{
     const col = LEAGUE_COLUMNS.find(c=>c.key===key);
     const arrow = leagueSortKey===key ? (leagueSortDesc?' ▾':' ▴') : '';
-    html += `<th class="league-sort-th" data-key="${key}" style="padding:7px 4px; text-align:${col.align}; cursor:pointer;">${col.label}${arrow}</th>`;
+    const contextClass = key==='avg_opp' ? ' league-context-col' : '';
+    html += `<th class="league-sort-th${contextClass}" data-key="${key}" style="padding:7px 4px; text-align:${col.align}; cursor:pointer;">${col.label}${arrow}</th>`;
   });
   html += `</tr></thead><tbody>`;
   sorted.forEach((r,i)=>{
@@ -4176,9 +4188,9 @@ function buildLeagueTableHtml(rows, showTierColumn){
       <td style="padding:7px 4px; text-align:center; color:var(--red);">${r.losses}</td>
       <td style="padding:7px 4px; text-align:center; color:var(--text-dim);">${r.draws}</td>
       <td style="padding:7px 4px; text-align:center;">${r.gd>=0?'+':''}${r.gd}</td>
-      <td style="padding:7px 4px; text-align:center;">${r.avg_opp}</td>
-      <td style="padding:7px 4px; text-align:center;">${formHtml}</td>
       <td style="padding:7px 8px 7px 4px; text-align:right; font-weight:700; color:var(--gold-bright);">${r.points}</td>
+      <td class="league-context-col" style="padding:7px 4px; text-align:center;">${r.avg_opp}</td>
+      <td style="padding:7px 4px; text-align:center;">${formHtml}</td>
     </tr>`;
   });
   html += `</tbody></table></div>`;

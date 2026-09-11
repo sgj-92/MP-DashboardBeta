@@ -272,6 +272,9 @@
   }
   .callout-card .cc-title{ font-size:13.5px; font-weight:700; color:var(--gold-bright); margin-bottom:4px; }
   .callout-card .cc-detail{ font-size:11.5px; color:var(--text-dim); line-height:1.5; }
+  /* Marks where the league table (P/W/L/D/GD/Pts) ends and supporting
+     context (Avg Opp/Form) begins -- a subtle divider, not a hard rule. */
+  .league-context-col{ border-left:1px solid var(--surface-border); }
   .section-heading{
     font-family:'Helvetica Neue', Arial, sans-serif;
     font-size:13px; font-weight:700; color:var(--text);
