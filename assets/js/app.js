@@ -864,6 +864,25 @@ function getAvailableMonths(){
   getDisplayMatches().forEach(m=> months.add(m.date.slice(0,7)));
   return [...months].sort();
 }
+
+// The most recently *completed* calendar month, derived from the real
+// system date -- not hard-coded, and not just "the latest month with any
+// data" (which could still be the current, in-progress month). Falls back
+// to the most recent earlier month that actually has data if the
+// immediately-previous month has none, and to 'all' only if there's no
+// historical data at all -- so Rankings/Monthly Summary never default to
+// an empty screen. Shared by Power Rankings and Monthly Summary so the two
+// "which month is current" concepts can never drift apart.
+function getDefaultRankingsMonth(){
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth()-1, 1);
+  const ym = `${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}`;
+  const available = getAvailableMonths(); // sorted ascending
+  if(available.includes(ym)) return ym;
+  const earlier = available.filter(m => m < ym);
+  return earlier.length ? earlier[earlier.length-1] : 'all';
+}
+
 function monthLabel(ym){
   const names = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const [y,m] = ym.split('-');
@@ -4065,12 +4084,14 @@ function renderUpcoming(){
 
 let summaryMonth = null;
 
-let summaryMode = 'information'; // 'information' | 'league'
+let summaryMode = 'league'; // 'league' | 'information' -- League Table is the default view
 
 function renderSummary(){
   const box = document.getElementById('summaryView');
-  const months = getAvailableMonths();
-  if(!summaryMonth) summaryMonth = months.length ? months[months.length-1] : 'all';
+  // Same "most recently completed month" logic as Power Rankings, so
+  // Monthly Summary opens on a finished competition period too, not
+  // whatever month happens to have the newest logged match.
+  if(!summaryMonth) summaryMonth = getDefaultRankingsMonth();
 
   let html = `<div class="fg-controls">
     <div class="fg-row"><label class="fg-label">Month</label>
@@ -4078,8 +4099,8 @@ function renderSummary(){
     </div>
     <div class="fg-row"><label class="fg-label">View</label>
       <select id="summaryModeSelect" class="fg-select">
-        <option value="information">Information</option>
         <option value="league">League Table</option>
+        <option value="information">Information</option>
       </select>
     </div>
   </div>
@@ -4924,6 +4945,16 @@ async function init(){
   devAreasState = await loadDevAreas();
   challengesState = await loadChallenges();
   northSouthResultsState = await loadNorthSouthResults();
+  // Power Rankings opens on the most recently completed month rather than
+  // All Time. getAvailableMonths() only needs the raw match state loaded
+  // above (not recomputeAll()'s derived PLAYERS/ratings), so this runs
+  // first -- recomputeAll() populates #monthSelect from selectedMonth, and
+  // it needs to see the real default, not 'all', to render correctly.
+  // The monthly min-games default (5, vs 10 for All Time) is applied here
+  // too, matching exactly what the month-select's own change handler
+  // already does for a manual switch.
+  selectedMonth = getDefaultRankingsMonth();
+  if(selectedMonth !== 'all') setMinGames(5);
   recomputeAll();
   applyTabVisibility();
   render();
