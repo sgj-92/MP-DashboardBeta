@@ -16,6 +16,7 @@ const SECTION_SUBNAV = {
   rankings: [
     { tab: 'power', label: 'Power Rankings', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 20v-6"/><path d="M12 20V8"/><path d="M18 20v-10"/><path d="M4 20h16"/></svg>' },
     { tab: 'wl', label: 'Win / Loss', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 3.2"/></svg>' },
+    { tab: 'summary', label: 'Monthly Summary', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="15" rx="1.5"/><path d="M4 9h16"/><path d="M8 4.5v-1.5"/><path d="M16 4.5v-1.5"/></svg>' },
   ],
   play: [
     { tab: 'findgame', label: 'Find Game' },
@@ -135,7 +136,12 @@ function renderSectionSubnav(){
   const items = SECTION_SUBNAV[activeSection];
   if(!items){ container.style.display = 'none'; container.innerHTML = ''; return; }
   container.style.display = 'grid';
-  container.style.gridTemplateColumns = `repeat(${items.length}, 1fr)`;
+  // minmax(0, 1fr), not plain 1fr -- a grid track's implicit min-width is
+  // "auto" (its content's own minimum size) just like a flex item, so a
+  // long label (e.g. "Monthly Summary") would force its whole track wider
+  // than its equal share and overflow the page instead of actually
+  // shrinking to let the span-level ellipsis do its job.
+  container.style.gridTemplateColumns = `repeat(${items.length}, minmax(0, 1fr))`;
   container.innerHTML = items.map(it=>
     `<button class="section-subnav-item ${it.tab===activeTab?'active':''}" data-tab="${it.tab}">${it.icon||''}<span>${it.label}</span></button>`
   ).join('');
@@ -495,6 +501,7 @@ function buildShellDom(){
   document.getElementById('tabrow').addEventListener('click', (e)=>{
     if(!e.target.closest('.tab-btn')) return;
     renderRankingsPodium();
+    renderKingsOfTiersPanel();
     renderSectionSubnav();
   });
 }
@@ -649,6 +656,103 @@ function renderRankingsPodium(){
   const colHeader = document.getElementById('rankingsColumnHeader');
   (colHeader || list).parentNode.insertBefore(podium, colHeader || list);
   podium.querySelectorAll('.podium-slot').forEach(el=>{
+    el.onclick = ()=> openSheet(el.dataset.player);
+  });
+}
+
+// ---- Kings of Tiers -------------------------------------------------------
+// Three kings of their own divisions (Tier A/B/C), not 1st/2nd/3rd overall --
+// deliberately a separate concept from the podium above, which is the top 3
+// of whichever tier/month scope is currently selected. Reuses exactly the
+// same ranking data and the same gating rules as the podium (rating mode,
+// no active search, min-games still at its scope's own default) so the two
+// can never disagree, plus one extra rule of its own: only makes sense
+// when every tier is on screen at once (activeTier === 'All'), since
+// filtering to a single tier already answers "who's #1 here".
+function computeKingsOfTiers(){
+  if(activeTab !== 'power') return null;
+  if(activeSortP !== 'rating') return null;
+  if(query !== '') return null;
+  if(activeTier !== 'All') return null;
+  const defaultMinGames = selectedMonth === 'all' ? 10 : 5;
+  if(minGames !== defaultMinGames) return null;
+
+  const inMonthView = selectedMonth !== 'all';
+  let rows = PLAYERS.slice();
+  if(inMonthView){
+    const monthly = computeMonthlyStats(selectedMonth);
+    const monthlyRatings = computeMonthlyRating(selectedMonth);
+    rows = rows.map(p => ({...p, ...(monthly[p.name] || ZERO_MONTH_STATS),
+      month_rating: (p.name in monthlyRatings) ? Math.round(monthlyRatings[p.name]*10)/10 : null}));
+  }
+  rows = rows.filter(p => p.total >= minGames);
+  if(inMonthView) rows = rows.filter(p => p.month_rating !== null && p.month_rating !== undefined);
+  // Same All-Time eligibility rule as the podium/list -- a monthly king only
+  // has to have actually played that month, an all-time king has to still
+  // be an active-enough part of the group right now.
+  if(!inMonthView) rows = rows.filter(p => isRankingEligible(p.name));
+
+  const kings = {};
+  ['A','B','C'].forEach(tier=>{
+    const tierRows = rows.filter(p=>p.tier===tier).sort((a,b)=>{
+      const av = inMonthView ? a.month_rating : a.rating;
+      const bv = inMonthView ? b.month_rating : b.rating;
+      return bv - av;
+    });
+    if(tierRows.length){
+      const p = tierRows[0];
+      kings[tier] = { name: p.name, rating: Math.round(inMonthView ? p.month_rating : p.rating) };
+    }
+  });
+  if(!kings.A && !kings.B && !kings.C) return null;
+  return kings;
+}
+
+function renderKingsOfTiersPanel(){
+  const existing = document.getElementById('kingsOfTiersPanel');
+  if(existing) existing.remove();
+
+  const kings = computeKingsOfTiers();
+  if(!kings) return;
+
+  const list = document.getElementById('list');
+  if(!list) return;
+
+  const periodLabel = selectedMonth === 'all' ? 'All Time' : monthLabel(selectedMonth);
+  const tierNames = { A: 'Tier A', B: 'Tier B', C: 'Tier C' };
+
+  const panel = document.createElement('div');
+  panel.className = 'kings-panel';
+  panel.id = 'kingsOfTiersPanel';
+  panel.innerHTML = `
+    <div class="kings-panel-header">
+      <span class="kings-panel-title">Kings of Tiers</span>
+      <span class="kings-panel-period">${periodLabel}</span>
+    </div>
+    <div class="kings-row">
+      ${['A','B','C'].map(tier=>{
+        const k = kings[tier];
+        return `<div class="kings-card kings-tier-${tier.toLowerCase()}" ${k ? `data-player="${k.name}"` : ''}>
+          <div class="kings-crown-wrap"><img class="kings-crown" src="assets/rankings/podium-crown-laurel.png" alt="" onerror="this.style.display='none'"></div>
+          ${k ? `
+            <div class="kings-name">${k.name}</div>
+            <div class="kings-tier-label">${tierNames[tier]}</div>
+            <div class="kings-rating">${k.rating}</div>
+          ` : `
+            <div class="kings-name kings-name-empty">—</div>
+            <div class="kings-tier-label">${tierNames[tier]}</div>
+          `}
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  // Above the podium (if any), otherwise straight before the column
+  // header/list -- an honours-board glance first, the fuller top-3 board
+  // beneath it.
+  const anchor = document.getElementById('rankingsPodium') || document.getElementById('rankingsColumnHeader') || list;
+  anchor.parentNode.insertBefore(panel, anchor);
+  panel.querySelectorAll('.kings-card[data-player]').forEach(el=>{
     el.onclick = ()=> openSheet(el.dataset.player);
   });
 }
@@ -1552,6 +1656,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     _originalRender.apply(this, arguments);
     applyRankingEligibility();
     renderRankingsPodium();
+    renderKingsOfTiersPanel();
     hero.style.display = (activeTab === 'power') ? 'block' : 'none';
     syncHeaderSectionTitle();
     // Viewer foundation init happens here, on the first real render, rather
