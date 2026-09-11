@@ -554,6 +554,59 @@ function buildShellDom(){
   });
 }
 
+// ---- Monthly Rating Breakdown ---------------------------------------------
+// One tap-target shared by every place a monthly rating is shown -- Kings of
+// Tiers, the podium, and the full ranking list -- so there is exactly one
+// "why is this player's rating X this month" screen rather than several
+// that could drift apart. All the actual maths lives in app.js
+// (buildMonthlyRatingBreakdownHtml / buildMonthlyRatingCompareHtml, on top
+// of the real computeMonthlyJourney engine); this just owns the modal shell
+// and the toggle/compare wiring, same pattern as openNorthSouth above.
+function openMonthlyRatingBreakdown(name, month){
+  let modal = document.getElementById('monthlyRatingModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.className = 'shell-more-sheet';
+    modal.id = 'monthlyRatingModal';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
+  }
+  renderMonthlyRatingModal(modal, name, month);
+  modal.classList.add('show');
+}
+
+function renderMonthlyRatingModal(modal, name, month){
+  modal.innerHTML = `<div class="shell-more-panel">
+    <h3 style="margin-bottom:10px;">Monthly Rating Breakdown</h3>
+    <div id="mrbModalBody">${buildMonthlyRatingBreakdownHtml(name, month)}</div>
+  </div>`;
+  const fc = document.getElementById('mrbFullCalcToggle');
+  if(fc) fc.onclick = ()=>{
+    const body = document.getElementById('mrbFullCalcBody');
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    fc.textContent = open ? 'View full calculation ›' : 'View full calculation ⌄';
+  };
+  const hw = document.getElementById('mrbHowItWorksToggle');
+  if(hw) hw.onclick = ()=>{
+    const body = document.getElementById('mrbHowItWorksBody');
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    hw.textContent = open ? 'How monthly ratings work ›' : 'How monthly ratings work ⌄';
+  };
+  modal.querySelectorAll('.mrb-compare-btn').forEach(btn=>{
+    btn.onclick = ()=> renderMonthlyRatingCompareModal(modal, name, btn.dataset.compare, month);
+  });
+}
+
+function renderMonthlyRatingCompareModal(modal, nameA, nameB, month){
+  modal.innerHTML = `<div class="shell-more-panel">
+    <button class="explainer-toggle mrb-back-btn" style="padding:0 0 8px;">‹ Back to ${nameA}</button>
+    <div id="mrbModalBody">${buildMonthlyRatingCompareHtml(nameA, nameB, month)}</div>
+  </div>`;
+  modal.querySelector('.mrb-back-btn').onclick = ()=> renderMonthlyRatingModal(modal, nameA, month);
+}
+
 // ---- Ranking eligibility (All-Time only) ---------------------------------
 // The group's own existing standard -- play at least 2 games to stay "in
 // the group" -- wasn't actually enforced anywhere before; some genuinely
@@ -704,7 +757,10 @@ function renderRankingsPodium(){
   const colHeader = document.getElementById('rankingsColumnHeader');
   (colHeader || list).parentNode.insertBefore(podium, colHeader || list);
   podium.querySelectorAll('.podium-slot').forEach(el=>{
-    el.onclick = ()=> openSheet(el.dataset.player);
+    el.onclick = ()=>{
+      if(selectedMonth!=='all') openMonthlyRatingBreakdown(el.dataset.player, selectedMonth);
+      else openSheet(el.dataset.player);
+    };
   });
 }
 
@@ -801,7 +857,10 @@ function renderKingsOfTiersPanel(){
   const anchor = document.getElementById('rankingsPodium') || document.getElementById('rankingsColumnHeader') || list;
   anchor.parentNode.insertBefore(panel, anchor);
   panel.querySelectorAll('.kings-card[data-player]').forEach(el=>{
-    el.onclick = ()=> openSheet(el.dataset.player);
+    el.onclick = ()=>{
+      if(selectedMonth!=='all') openMonthlyRatingBreakdown(el.dataset.player, selectedMonth);
+      else openSheet(el.dataset.player);
+    };
   });
 }
 

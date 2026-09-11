@@ -1321,7 +1321,13 @@ function render(){
   rows.forEach((p, i)=>{
     const row = document.createElement('div');
     row.className = 'row';
-    row.onclick = ()=> openSheet(p.name);
+    row.onclick = ()=>{
+      if(activeTab==='power' && selectedMonth!=='all' && p.month_rating!==null && p.month_rating!==undefined && typeof openMonthlyRatingBreakdown==='function'){
+        openMonthlyRatingBreakdown(p.name, selectedMonth);
+      } else {
+        openSheet(p.name);
+      }
+    };
     if(activeTab==='wl'){
       row.innerHTML = `
         <div class="rank">${i+1}</div>
@@ -2780,6 +2786,190 @@ function buildMonthlyRatingSection(name){
   const gamesThisMonth = MATCHES.filter(m => (m.winners.includes(name) || m.losers.includes(name)) && m.date.slice(0,7)===selectedMonth).length;
   return `<div class="section-heading" style="margin-top:14px;">📅 ${label} rating</div>
     <div class="matchup-vs"><b style="font-size:15px;">${Math.round(rating)}</b> <span style="color:var(--text-dim); font-size:11.5px;">— a tier-seeded rating using only ${gamesThisMonth} game${gamesThisMonth===1?'':'s'} from ${label}, as if that month were its own mini-season. Overall rating (${Math.round(p.rating)}) stays the official number.</span></div>`;
+}
+
+// ===================== MONTHLY RATING BREAKDOWN =====================
+// A dedicated, auditable "why is this rating X" view -- deliberately
+// separate from the general Player Profile (openSheet): this is a
+// historical/month-specific inspection, not an ongoing profile. Every
+// number here comes from the exact same engine as the Power Rankings list
+// itself (computeMonthlyRating / computeElo / computeMonthlyJourney /
+// buildMatchDetailBlock) -- nothing here is a simplified parallel formula,
+// so it always reconciles with what's shown on screen.
+
+// Within-tier monthly standings using the identical filter/sort the real
+// Power Rankings monthly list already applies (tier match, current
+// min-games threshold, must have actually played that month) -- so "#2"
+// here is guaranteed to be the same #2 shown in the list, never a second
+// opinion computed differently.
+function computeMonthlyTierStandings(month, tier){
+  if(month === 'all') return [];
+  const monthlyRatings = computeMonthlyRating(month);
+  const monthly = computeMonthlyStats(month);
+  return PLAYERS.filter(p => p.tier === tier)
+    .map(p => ({...p, ...(monthly[p.name] || ZERO_MONTH_STATS),
+      month_rating: (p.name in monthlyRatings) ? Math.round(monthlyRatings[p.name]*10)/10 : null}))
+    .filter(p => p.total >= minGames && p.month_rating !== null && p.month_rating !== undefined)
+    .sort((a,b)=> b.month_rating - a.month_rating);
+}
+
+// Everything one player+month's breakdown needs, bundled once so the main
+// view, "View full calculation", and the Compare view all draw from the
+// same numbers rather than risk disagreeing.
+function getMonthlyRatingContext(name, month){
+  if(month === 'all') return null;
+  const p = PLAYERS.find(x=>x.name===name);
+  if(!p) return null;
+  const tier = TIER_MAP[name] || p.tier;
+  const standings = computeMonthlyTierStandings(month, tier);
+  const idx = standings.findIndex(s=>s.name===name);
+  if(idx === -1) return null; // no qualifying monthly rating for this player
+  const seedTier = STARTING_TIER_MAP[name] || TIER_MAP[name] || 'B';
+  return {
+    name, tier, month,
+    player: standings[idx],
+    rating: standings[idx].month_rating,
+    position: idx+1,
+    standings,
+    above: idx>0 ? standings[idx-1] : null,
+    below: idx<standings.length-1 ? standings[idx+1] : null,
+    seedTier, seed: TIER_SEED[seedTier],
+    journey: computeMonthlyJourney(name, month),
+  };
+}
+
+const MONTHLY_RATING_METHODOLOGY_TEXT = `Each month is scored as its own mini-season, not a running total. Every player starts the month at their tier's starting point (S 2000, A 1700, B 1400, C 1100) — not last month's rating, and not their overall rating. From there, the same engine that produces the main Power Rating (games won within each match count, not just who won) solves everyone's ratings for that month jointly — checking every game against everyone else's current estimate and adjusting in small steps, repeated until it settles — the same method as the season-long rating, just run fresh each month on a smaller set of games. That's why two players can start level and finish apart: the gap comes entirely from that month's results, nothing carried over from before.`;
+
+function buildMonthlyReconciliationText(ctx){
+  const matchCount = ctx.journey ? ctx.journey.filter(j=>j.type==='match').length : 0;
+  const seedLabel = ctx.seedTier !== ctx.tier
+    ? `their Tier ${ctx.seedTier} starting point (${ctx.seed}) — they've since moved to Tier ${ctx.tier}`
+    : `the Tier ${ctx.tier} starting point (${ctx.seed})`;
+  return `${ctx.name} entered ${monthLabel(ctx.month)} at ${seedLabel}. Across ${matchCount} rated match${matchCount===1?'':'es'} that month (${ctx.player.wins}-${ctx.player.losses}), the engine solved every player's rating jointly — the same method used for the overall Power Rating, just run fresh on this month's ${matchCount===1?'match':'matches'} only — and settled on <b style="color:var(--gold-bright);">${Math.round(ctx.rating)}</b>.`;
+}
+
+function buildMonthlyRatingHeaderHtml(ctx){
+  let gapLine, belowLine = '', closeMargin = false;
+  if(ctx.position === 1){
+    gapLine = ctx.below
+      ? `${Math.round(ctx.rating - ctx.below.month_rating)} pt${Math.round(ctx.rating - ctx.below.month_rating)===1?'':'s'} ahead of #2 ${ctx.below.name}`
+      : `Only qualifying player in Tier ${ctx.tier} this month`;
+    closeMargin = !!ctx.below && Math.abs(ctx.rating - ctx.below.month_rating) < 10;
+  } else {
+    const gapAbove = Math.round(ctx.above.month_rating - ctx.rating);
+    gapLine = `${gapAbove} pt${gapAbove===1?'':'s'} behind #${ctx.position-1} ${ctx.above.name}`;
+    if(ctx.below){
+      const gapBelow = Math.round(ctx.rating - ctx.below.month_rating);
+      belowLine = `${gapBelow} pt${gapBelow===1?'':'s'} ahead of #${ctx.position+1} ${ctx.below.name}`;
+    }
+  }
+  return `<div class="mrb-header">
+    <div class="mrb-period">${monthLabel(ctx.month)} · Tier ${ctx.tier}</div>
+    <div class="mrb-rankname"><span class="mrb-rank">#${ctx.position}</span> <span class="mrb-name">${ctx.name}</span></div>
+    <div class="mrb-rating-row"><span class="mrb-rating">${Math.round(ctx.rating)}</span><span class="mrb-rating-label">Monthly Rating</span></div>
+    <div class="mrb-gap">${gapLine}</div>
+    ${belowLine ? `<div class="mrb-gap mrb-gap-secondary">${belowLine}</div>` : ''}
+    ${closeMargin ? `<div class="mrb-close-note">This is a tight one — worth checking the numbers below.</div>` : ''}
+  </div>`;
+}
+
+function buildMonthlyMatchCardsHtml(ctx){
+  if(!ctx.journey) return `<div class="section-sub">No match data available.</div>`;
+  const matchEntries = ctx.journey.filter(j=>j.type==='match');
+  if(matchEntries.length === 0) return `<div class="section-sub">No qualifying matches this month.</div>`;
+  return matchEntries.map(j=>{
+    const m = MATCHES[j._idx];
+    if(!m) return '';
+    const resultLabel = j.won ? `<span class="perf-pos">Win</span>` : `<span class="perf-neg">Loss</span>`;
+    return `<div class="callout-card" style="padding:10px 12px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px;">
+        <div style="font-size:11.5px; color:var(--text-dim);">${dayLabel(m.date)}</div>
+        <div style="font-size:11.5px;">${resultLabel}</div>
+      </div>
+      <div style="margin-top:2px; font-size:12.5px; font-weight:700;">${m.score}</div>
+      ${buildMatchDetailBlock(m, j._idx, true, true)}
+    </div>`;
+  }).join('');
+}
+
+function buildMonthlyFullCalculationHtml(ctx){
+  const exact = ctx.journey && ctx.journey.length ? ctx.journey[ctx.journey.length-1].rating : ctx.rating;
+  return `<div class="mrb-detail-line">Engine: same joint rating solver as the overall Power Rating — K=28 per full-weight game-share swing, 300 passes over the month's match set until ratings stop moving.</div>
+    <div class="mrb-detail-line">Seed: Tier ${ctx.seedTier} starting point = <b style="color:var(--text);">${ctx.seed}</b></div>
+    <div class="mrb-detail-line">Exact monthly rating: <b style="color:var(--text);">${Math.round(exact*100)/100}</b> (shown rounded to ${Math.round(ctx.rating)} elsewhere)</div>
+    <div class="mrb-detail-line">Qualifying threshold this view uses: ${minGames}+ games this month — the same minimum currently applied to the Power Rankings list, so this can never show a player the list itself wouldn't.</div>`;
+}
+
+function buildMonthlyCompareButtonsHtml(ctx){
+  const btns = [];
+  if(ctx.above) btns.push(`<button class="mp-btn-secondary mrb-compare-btn" data-compare="${ctx.above.name}">Compare with #${ctx.position-1} ${ctx.above.name}</button>`);
+  if(ctx.below) btns.push(`<button class="mp-btn-secondary mrb-compare-btn" data-compare="${ctx.below.name}">Compare with #${ctx.position+1} ${ctx.below.name}</button>`);
+  if(btns.length === 0) return '';
+  return `<div class="mrb-compare-row">${btns.join('')}</div>`;
+}
+
+function buildMonthlyRatingBreakdownHtml(name, month){
+  const ctx = getMonthlyRatingContext(name, month);
+  if(!ctx) return `<div class="section-sub">No qualifying monthly rating for ${name} in ${monthLabel(month)}.</div>`;
+
+  let html = buildMonthlyRatingHeaderHtml(ctx);
+  html += `<div class="section-sub" style="margin-top:12px;">${buildMonthlyReconciliationText(ctx)}</div>`;
+
+  if(ctx.journey && ctx.journey.length > 1){
+    html += `<div class="section-heading" style="margin-top:14px;">Rating over the month</div>
+      <div class="matchup-vs" style="padding:8px;">${buildJourneyChartSvg(ctx.journey)}</div>`;
+  }
+
+  const matchCount = ctx.journey ? ctx.journey.filter(j=>j.type==='match').length : 0;
+  html += `<div class="section-heading" style="margin-top:14px;">Matches this month (${matchCount})</div>`;
+  html += buildMonthlyMatchCardsHtml(ctx);
+
+  html += `<button class="explainer-toggle mrb-fullcalc-toggle" id="mrbFullCalcToggle" style="margin-top:10px;">View full calculation ›</button>
+    <div class="section-sub" id="mrbFullCalcBody" style="display:none; margin-top:6px;">${buildMonthlyFullCalculationHtml(ctx)}</div>`;
+
+  const compareHtml = buildMonthlyCompareButtonsHtml(ctx);
+  if(compareHtml) html += `<div style="margin-top:14px;">${compareHtml}</div>`;
+
+  html += `<button class="explainer-toggle mrb-howitworks-toggle" id="mrbHowItWorksToggle" style="margin-top:14px;">How monthly ratings work ›</button>
+    <div class="section-sub" id="mrbHowItWorksBody" style="display:none; margin-top:6px;">${MONTHLY_RATING_METHODOLOGY_TEXT}</div>`;
+
+  return html;
+}
+
+function buildMonthlyRatingCompareHtml(nameA, nameB, month){
+  const ctxA = getMonthlyRatingContext(nameA, month);
+  const ctxB = getMonthlyRatingContext(nameB, month);
+  if(!ctxA || !ctxB) return `<div class="section-sub">Not enough data to compare.</div>`;
+  const diff = Math.round((ctxA.rating - ctxB.rating)*10)/10;
+  const leaderCtx = diff >= 0 ? ctxA : ctxB;
+  const trailCtx = diff >= 0 ? ctxB : ctxA;
+  const margin = Math.abs(diff);
+
+  const sameSeed = ctxA.seedTier === ctxB.seedTier;
+  const seedLine = sameSeed
+    ? `Both started ${monthLabel(month)} at the same Tier ${ctxA.seedTier} seed of ${ctxA.seed} — the gap below comes entirely from this month's results.`
+    : `${ctxA.name} started from Tier ${ctxA.seedTier} (${ctxA.seed}) and ${ctxB.name} from Tier ${ctxB.seedTier} (${ctxB.seed}) — a different starting point going in, on top of this month's results.`;
+
+  const statLine = (ctx) => `<b style="color:var(--text);">${ctx.name}</b>: ${ctx.player.wins}-${ctx.player.losses}, avg opponent ${Math.round(ctx.player.avg_match_strength)}, ${ctx.player.avg_overperf_pct>=0?'+':''}${ctx.player.avg_overperf_pct}% vs. expectation`;
+
+  const explainer = margin < 10
+    ? `A margin this small usually comes down to a handful of close games — check each player's full match list for the detail.`
+    : `${leaderCtx.name}'s edge shows up mainly in ${leaderCtx.player.avg_overperf_pct > trailCtx.player.avg_overperf_pct ? 'outperforming what their results were expected to be' : 'a tougher run of opposition'} this month.`;
+
+  return `<div class="mrb-header">
+    <div class="mrb-period">${monthLabel(month)} · Tier ${ctxA.tier}</div>
+    <div class="mrb-compare-title">${ctxA.name} vs ${ctxB.name}</div>
+  </div>
+  <div class="mrb-compare-ratings">
+    <div class="mrb-compare-side"><div class="mrb-compare-name">${ctxA.name}</div><div class="mrb-compare-rating">${Math.round(ctxA.rating)}</div><div class="mrb-compare-pos">#${ctxA.position}</div></div>
+    <div class="mrb-compare-vs">VS</div>
+    <div class="mrb-compare-side"><div class="mrb-compare-name">${ctxB.name}</div><div class="mrb-compare-rating">${Math.round(ctxB.rating)}</div><div class="mrb-compare-pos">#${ctxB.position}</div></div>
+  </div>
+  <div class="section-sub" style="margin-top:10px;">${leaderCtx.name} leads by ${margin} pt${margin===1?'':'s'}. ${seedLine}</div>
+  <div class="section-heading" style="margin-top:14px;">This month, side by side</div>
+  <div class="matchup-vs">${statLine(ctxA)}</div>
+  <div class="matchup-vs" style="margin-top:6px;">${statLine(ctxB)}</div>
+  <div class="section-sub" style="margin-top:8px;">${explainer}</div>`;
 }
 
 function openSheet(name, matchFilter){
