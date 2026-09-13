@@ -450,6 +450,9 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
 .shell-header .brand-wordmark{
   font-family: var(--font-prestige); color: var(--text);
   font-size: 13.5px; letter-spacing: 0.09em; text-transform: uppercase;
+  /* Never wrap to a second line -- the header is a fixed-height flex row, and
+     the Full History pill sitting beside it must not be able to break it. */
+  white-space: nowrap;
 }
 .shell-header .brand-wordmark b{ color: var(--gold-bright); font-weight: 400; }
 .shell-section-title{
@@ -1363,3 +1366,45 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
 .mrb-compare-rating{ font-family: var(--font-interface); font-size: 24px; font-weight: 700; color: var(--gold-bright); margin-top: 2px; }
 .mrb-compare-pos{ font-family: var(--font-interface); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .mrb-compare-vs{ font-family: var(--font-interface); font-size: 11px; font-weight: 700; color: var(--text-dim); flex: 0 0 auto; }
+
+/* ==========================================================================
+   DATA & RANKINGS -- the app-wide Data Range setting (More > Data & Rankings)
+   Styled as a settings list, deliberately unlike the Rankings filter controls:
+   this changes the dataset the whole app calculates from, it is not a filter.
+   ========================================================================== */
+.dr-options{ display: flex; flex-direction: column; gap: 8px; }
+.dr-option{
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+  background: var(--surface-1); border: 1px solid var(--surface-border); border-radius: var(--radius-sm);
+  padding: 12px; cursor: pointer; font-family: var(--font-interface);
+}
+.dr-option.selected{ border-color: var(--gold-hairline); background: var(--gold-wash); }
+.dr-radio{
+  flex: 0 0 auto; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%;
+  border: 1.5px solid var(--text-dim); position: relative;
+}
+.dr-option.selected .dr-radio{ border-color: var(--gold-bright); }
+.dr-option.selected .dr-radio::after{
+  content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--gold-bright);
+}
+.dr-option-text{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dr-option-label{ font-size: 14px; font-weight: 600; color: var(--text); }
+.dr-option.selected .dr-option-label{ color: var(--gold-bright); }
+.dr-option-sub{ font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
+.dr-option-sub b{ color: var(--gold-dim); font-weight: 700; }
+.dr-confirm-actions{ display: flex; gap: 8px; margin-top: 16px; }
+.dr-confirm-actions .mp-btn-primary, .dr-confirm-actions .mp-btn-secondary{ flex: 1 1 auto; }
+
+/* Global "you are not on the recommended dataset" cue. Small enough to ignore,
+   present enough to explain a surprising number, and tappable straight to the
+   setting. Never rendered at all in the Verified (default) view. */
+.full-history-pill{
+  flex: 0 0 auto; background: transparent; cursor: pointer;
+  border: 1px solid var(--gold-dim); border-radius: 999px;
+  color: var(--gold-dim); font-family: var(--font-interface);
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  padding: 3px 7px; line-height: 1; white-space: nowrap;
+}
+@media (max-width: 360px){
+  .full-history-pill{ font-size: 8px; padding: 3px 5px; letter-spacing: 0.04em; }
+}
