@@ -443,8 +443,13 @@ function getAllApprovedMatches(){
       isDraw: isDraw!==undefined?isDraw:m.isDraw};
   });
   all = all.filter(m=>!deletedIdsState.includes(m.id));
-  if(dataQualityFilter === 'verified') all = all.filter(m => m.verified !== false);
-  else if(dataQualityFilter === 'unverified') all = all.filter(m => m.verified === false);
+  // The one and only place the app-wide Data Range setting is applied. Every
+  // calculated statistic in the app -- ratings, monthly ratings, win/loss,
+  // league points, form, partnerships, head-to-head, recommendations,
+  // call-outs -- is derived from this function (directly, or via
+  // getEffectiveMatches/getDisplayMatches), so no screen can ever end up
+  // calculating against a different dataset than another.
+  if(dataRange === 'verified') all = all.filter(m => m.verified !== false);
   return all;
 }
 
@@ -857,7 +862,39 @@ let query = "";
 let minGames = 10;
 let selectedMonth = 'all';
 let selectedGamesPlayer = 'all';
-let dataQualityFilter = 'verified'; // 'all' | 'verified' (June onwards) | 'unverified' (pre-June, single-sourced)
+
+// ---- Data Range: app-wide dataset setting, not a per-screen filter --------
+// 'verified' -- June 2026 onwards only, cross-checked. The default, and the
+//               recommended experience.
+// 'all'      -- full history, including pre-June 2026 matches that were
+//               single-sourced and may be incomplete or less reliable.
+// Lives in More > Data & Rankings, is persisted per device, and is applied in
+// exactly one place (getAllApprovedMatches) so every screen agrees.
+const DATA_RANGE_STORAGE_KEY = 'moneypadel_data_range';
+const DATA_RANGE_ACK_KEY = 'moneypadel_data_range_full_ack';
+
+function readStoredDataRange(){
+  // localStorage can be unavailable/restricted (private browsing, PWA edge
+  // cases) -- degrade to the recommended default rather than failing.
+  try {
+    return localStorage.getItem(DATA_RANGE_STORAGE_KEY) === 'all' ? 'all' : 'verified';
+  } catch(e){ return 'verified'; }
+}
+
+let dataRange = readStoredDataRange();
+
+function setDataRange(value){
+  dataRange = (value === 'all') ? 'all' : 'verified';
+  try { localStorage.setItem(DATA_RANGE_STORAGE_KEY, dataRange); } catch(e){ /* choice just won't persist */ }
+}
+
+function hasAcknowledgedFullHistory(){
+  try { return localStorage.getItem(DATA_RANGE_ACK_KEY) === '1'; } catch(e){ return false; }
+}
+
+function acknowledgeFullHistory(){
+  try { localStorage.setItem(DATA_RANGE_ACK_KEY, '1'); } catch(e){}
+}
 
 function getAvailableMonths(){
   const months = new Set();
@@ -881,6 +918,20 @@ function getDefaultRankingsMonth(){
   if(available.includes(ym)) return ym;
   const earlier = available.filter(m => m < ym);
   return earlier.length ? earlier[earlier.length-1] : 'all';
+}
+
+// Month selection and Data Range are deliberately separate concepts: the
+// range decides which matches exist at all, the month decides which slice of
+// them you're inspecting. Narrowing the range can therefore strand a month
+// that no longer has any data behind it (e.g. sitting on May 2026 and
+// switching back to Verified). Rather than silently widening the dataset
+// again, drop back to the normal default month for whatever data is now
+// available.
+function reconcileSelectedMonth(){
+  if(selectedMonth === 'all') return false;
+  if(getAvailableMonths().includes(selectedMonth)) return false;
+  selectedMonth = getDefaultRankingsMonth();
+  return true;
 }
 
 function monthLabel(ym){
@@ -1078,7 +1129,7 @@ function applyTabVisibility(){
         const el = document.getElementById(id); if(el) el.style.display = 'none';
       });
       const listEl = document.getElementById('list'); if(listEl) listEl.style.display = 'block';
-      ['tierbar','searchWrap','minGamesRow','monthFilterRow','dataQualityRow','sortbar'].forEach(id=>{
+      ['tierbar','searchWrap','minGamesRow','monthFilterRow','sortbar'].forEach(id=>{
         const el = document.getElementById(id);
         if(el) el.style.display = (id==='searchWrap') ? 'block' : 'flex';
       });
@@ -1125,7 +1176,6 @@ document.querySelectorAll('#tabrow .tab-btn').forEach(b=>{
     document.getElementById('searchWrap').style.display = (isListView || isPlayers) ? 'block' : 'none';
     document.getElementById('minGamesRow').style.display = isListView ? 'flex' : 'none';
     document.getElementById('monthFilterRow').style.display = isListView ? 'flex' : 'none';
-    document.getElementById('dataQualityRow').style.display = (isListView || isCallouts) ? 'flex' : 'none';
     document.getElementById('sortbar').style.display = (activeTab==='wl') ? 'flex' : 'none';
     document.getElementById('sortbarPower').style.display = (activeTab==='power') ? 'flex' : 'none';
     document.getElementById('list').style.display = isListView ? 'block' : 'none';
@@ -1170,18 +1220,24 @@ document.querySelectorAll('#tabrow .tab-btn').forEach(b=>{
     };
     document.getElementById('explainer').innerHTML = EXPLAINER_BY_TAB[activeTab] || '';
 
-    if(isCallouts) renderCallouts();
-    else if(isPlayers) renderPlayersTab();
-    else if(isFindGame) renderFindGame();
-    else if(isManage) renderManage();
-    else if(isGames) renderGamesTab();
-    else if(isH2H) renderH2H();
-    else if(isWishlist) renderWishlist();
-    else if(isUpcoming) renderUpcoming();
-    else if(isSummary) renderSummary();
-    else render();
+    renderActiveTab();
   };
 });
+
+// Re-render whichever tab is currently on screen. Power Rankings and Win/Loss
+// share render(); everything else has its own render function.
+function renderActiveTab(){
+  if(activeTab === 'callouts') renderCallouts();
+  else if(activeTab === 'players') renderPlayersTab();
+  else if(activeTab === 'findgame') renderFindGame();
+  else if(activeTab === 'manage') renderManage();
+  else if(activeTab === 'games') renderGamesTab();
+  else if(activeTab === 'h2h') renderH2H();
+  else if(activeTab === 'wishlist') renderWishlist();
+  else if(activeTab === 'upcoming') renderUpcoming();
+  else if(activeTab === 'summary') renderSummary();
+  else render();
+}
 
 document.querySelectorAll('#sortbar .sortbtn').forEach(b=>{
   b.onclick = ()=>{ activeSort = b.dataset.sort; document.querySelectorAll('#sortbar .sortbtn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(); };
@@ -1229,13 +1285,23 @@ monthSelect.addEventListener('change', e=>{
   rerenderCurrentTab();
 });
 
-const dataQualitySelect = document.getElementById('dataQualitySelect');
-dataQualitySelect.value = dataQualityFilter;
-dataQualitySelect.addEventListener('change', e=>{
-  dataQualityFilter = e.target.value;
+// The single entry point for changing the app-wide Data Range. Everything
+// downstream is rebuilt from the newly-filtered match list, so no screen can
+// be left showing figures from the other dataset.
+function applyDataRangeChange(value){
+  const previous = dataRange;
+  setDataRange(value);
+  if(dataRange === previous) return false;
   recomputeAll();
-  rerenderCurrentTab();
-});
+  // Narrowing the range can strand the selected month (see
+  // reconcileSelectedMonth) -- fix it before anything re-reads it.
+  reconcileSelectedMonth();
+  populateMonthSelect(document.getElementById('monthSelect'));
+  syncFullHistoryIndicator();
+  renderActiveTab();
+  renderHomeDashboard(); // no-ops if Home isn't built yet
+  return true;
+}
 
 
 function sortRows(rows){
@@ -4281,7 +4347,12 @@ function renderSummary(){
   // Same "most recently completed month" logic as Power Rankings, so
   // Monthly Summary opens on a finished competition period too, not
   // whatever month happens to have the newest logged match.
-  if(!summaryMonth) summaryMonth = getDefaultRankingsMonth();
+  // Also re-checked on every render, not just the first: narrowing the Data
+  // Range can strand the month this screen was last left on, and falling back
+  // to the default beats rendering an empty month.
+  if(!summaryMonth || (summaryMonth !== 'all' && !getAvailableMonths().includes(summaryMonth))){
+    summaryMonth = getDefaultRankingsMonth();
+  }
 
   let html = `<div class="fg-controls">
     <div class="fg-row"><label class="fg-label">Month</label>
@@ -4637,13 +4708,6 @@ function renderGamesTab(){
     <div class="fg-row"><label class="fg-label">Player</label>
       <select id="gamesPlayerSelect" class="fg-select"></select>
     </div>
-    <div class="fg-row"><label class="fg-label">Data</label>
-      <select id="gamesDataQualitySelect" class="fg-select">
-        <option value="all">All data</option>
-        <option value="verified">June onwards only (cross-checked)</option>
-        <option value="unverified">Pre-June only (single-sourced)</option>
-      </select>
-    </div>
   </div>`;
 
   html += `<div class="fg-controls">
@@ -4824,14 +4888,6 @@ Player C &amp; Player D"></textarea>
   gamesPlayerSelect.value = selectedGamesPlayer;
   gamesPlayerSelect.addEventListener('change', e=>{
     selectedGamesPlayer = e.target.value;
-    renderGamesTab();
-  });
-
-  const gamesDataQualitySelect = document.getElementById('gamesDataQualitySelect');
-  gamesDataQualitySelect.value = dataQualityFilter;
-  gamesDataQualitySelect.addEventListener('change', e=>{
-    dataQualityFilter = e.target.value;
-    recomputeAll();
     renderGamesTab();
   });
 

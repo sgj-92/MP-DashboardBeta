@@ -42,6 +42,7 @@ const MORE_ITEMS = [
   { tab: 'callouts', label: 'Insights / Call-Outs' },
   { special: 'about', label: 'About Power Rankings' },
   { special: 'doughnuts', label: 'Doughnuts' },
+  { special: 'datarange', label: 'Data & Rankings' },
 ];
 const MORE_ADMIN_ITEM = { tab: 'manage', label: 'Admin / Manage' };
 
@@ -258,6 +259,11 @@ function buildShellDom(){
       if(btn.dataset.special === 'doughnuts'){
         closeMoreSheet();
         openDoughnutLeaderboard();
+        return;
+      }
+      if(btn.dataset.special === 'datarange'){
+        closeMoreSheet();
+        openDataRangeSheet();
         return;
       }
       const b = legacyTabBtn(btn.dataset.tab);
@@ -552,6 +558,116 @@ function buildShellDom(){
     renderKingsOfTiersPanel();
     renderSectionSubnav();
   });
+}
+
+// ---- Data & Rankings: the app-wide Data Range setting ---------------------
+// Deliberately a setting, not a filter: it lives in More, it persists, and it
+// is the only place in the app where the dataset can be changed. The two
+// options map onto dataRange in app.js ('verified' | 'all'), which is applied
+// in exactly one place (getAllApprovedMatches) so every screen agrees.
+const DATA_RANGE_OPTIONS = [
+  { value: 'verified', label: 'Verified data', sub: 'June 2026 onwards', tag: 'Recommended' },
+  { value: 'all', label: 'Full history', sub: 'Includes matches before June 2026', tag: '' },
+];
+
+function openDataRangeSheet(){
+  let modal = document.getElementById('dataRangeModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.className = 'shell-more-sheet';
+    modal.id = 'dataRangeModal';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
+  }
+  renderDataRangeSheet(modal);
+  modal.classList.add('show');
+}
+
+function renderDataRangeSheet(modal){
+  const rows = DATA_RANGE_OPTIONS.map(opt => `
+    <button class="dr-option ${dataRange === opt.value ? 'selected' : ''}" data-range="${opt.value}">
+      <span class="dr-radio" aria-hidden="true"></span>
+      <span class="dr-option-text">
+        <span class="dr-option-label">${opt.label}</span>
+        <span class="dr-option-sub">${opt.sub}${opt.tag ? ` · <b>${opt.tag}</b>` : ''}</span>
+      </span>
+    </button>
+  `).join('');
+
+  modal.innerHTML = `<div class="shell-more-panel">
+    <h3>Data &amp; Rankings</h3>
+    <div class="mp-section-label" style="margin-bottom:8px;">Data range</div>
+    <div class="dr-options">${rows}</div>
+    <div class="section-sub" style="margin-top:14px;">Applies everywhere — rankings, ratings, records, form and every other statistic in the app.</div>
+  </div>`;
+
+  modal.querySelectorAll('.dr-option').forEach(btn=>{
+    btn.onclick = ()=>{
+      const value = btn.dataset.range;
+      if(value === dataRange) return;
+      // Only the step into the less-reliable dataset needs explaining, and
+      // only the first time -- going back to Verified never warns.
+      if(value === 'all' && !hasAcknowledgedFullHistory()){
+        openFullHistoryConfirm(modal);
+        return;
+      }
+      applyDataRangeChange(value);
+      renderDataRangeSheet(modal);
+    };
+  });
+}
+
+function openFullHistoryConfirm(parentModal){
+  let modal = document.getElementById('fullHistoryConfirmModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.className = 'shell-more-sheet';
+    modal.id = 'fullHistoryConfirmModal';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.classList.remove('show'); });
+  }
+  modal.innerHTML = `<div class="shell-more-panel">
+    <h3>Include historical data?</h3>
+    <div class="section-sub" style="font-size:12.5px;">Matches recorded before June 2026 may contain incomplete or less reliable information. Rankings and statistics may therefore differ from the verified-data view.</div>
+    <div class="dr-confirm-actions">
+      <button class="mp-btn-secondary" id="drConfirmCancel">Cancel</button>
+      <button class="mp-btn-primary" id="drConfirmUse">Use Full History</button>
+    </div>
+  </div>`;
+  modal.querySelector('#drConfirmCancel').onclick = ()=> modal.classList.remove('show');
+  modal.querySelector('#drConfirmUse').onclick = ()=>{
+    acknowledgeFullHistory();
+    applyDataRangeChange('all');
+    modal.classList.remove('show');
+    if(parentModal) renderDataRangeSheet(parentModal);
+  };
+  modal.classList.add('show');
+}
+
+// Subtle, permanent cue that the less-reliable dataset is in play. Shown only
+// in Full History, never in the recommended view, and taps straight through
+// to the setting that controls it -- so it explains itself rather than just
+// warning.
+function syncFullHistoryIndicator(){
+  const header = document.querySelector('.shell-header');
+  if(!header) return;
+  let pill = document.getElementById('fullHistoryIndicator');
+  if(dataRange !== 'all'){
+    if(pill) pill.remove();
+    return;
+  }
+  if(!pill){
+    pill = document.createElement('button');
+    pill.id = 'fullHistoryIndicator';
+    pill.className = 'full-history-pill';
+    pill.textContent = 'Full History';
+    pill.title = 'Viewing full history, including pre-June 2026 matches';
+    pill.onclick = ()=> openDataRangeSheet();
+    // Before the section title, which holds the right edge via margin-left:auto,
+    // so the pill reads as a badge on the brand rather than crowding the title.
+    const title = document.getElementById('shellSectionTitle');
+    header.insertBefore(pill, title || null);
+  }
 }
 
 // ---- Monthly Rating Breakdown ---------------------------------------------
@@ -884,7 +1000,6 @@ function buildRankingsHero(){
 }
 
 function buildCompactFiltersBar(){
-  const dataQualityRow = document.getElementById('dataQualityRow');
   const monthFilterRow = document.getElementById('monthFilterRow');
   const tierbar = document.getElementById('tierbar');
   const searchWrap = document.getElementById('searchWrap');
@@ -956,7 +1071,6 @@ function buildCompactFiltersBar(){
   const panel = document.createElement('div');
   panel.className = 'shell-more-panel';
   panel.innerHTML = `<h3>Filters</h3>`;
-  panel.appendChild(dataQualityRow);
   panel.appendChild(searchWrap);
   panel.appendChild(minGamesRow);
   const secondarySortLabel = document.createElement('div');
@@ -972,19 +1086,19 @@ function buildCompactFiltersBar(){
   filtersBtn.onclick = ()=> sheet.classList.add('show');
 
   // Gold dot on the Filter icon whenever any non-default filter is active --
-  // the only visible cue needed now that Min Games/Data/Search aren't shown
-  // permanently on screen.
-  const dataQualitySelectEl = document.getElementById('dataQualitySelect');
+  // the only visible cue needed now that Min Games/Search aren't shown
+  // permanently on screen. Data Range is deliberately NOT counted here: it's
+  // an app-wide setting in More, not a Rankings filter, and it has its own
+  // global indicator.
   const searchInputEl = document.getElementById('search');
   const minGamesInputEl = document.getElementById('minGamesInput');
   function updateFilterDot(){
-    const nonDefault = minGames !== 10 || (searchInputEl.value.trim() !== '') || (dataQualitySelectEl.value !== 'verified');
+    const nonDefault = minGames !== 10 || (searchInputEl.value.trim() !== '');
     filtersBtn.classList.toggle('has-filters', nonDefault);
   }
   minGamesInputEl.addEventListener('input', ()=> setTimeout(updateFilterDot, 0));
   document.querySelectorAll('.minGamesPresets .preset-btn').forEach(b=> b.addEventListener('click', ()=> setTimeout(updateFilterDot, 0)));
   searchInputEl.addEventListener('input', updateFilterDot);
-  dataQualitySelectEl.addEventListener('change', updateFilterDot);
 
   // Screen isolation: the toolbar belongs to Rankings (both Power Rankings
   // and Win/Loss share Month/Tier filtering) and must never persist onto
@@ -1789,6 +1903,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   buildCompactFiltersBar();
   buildRankingsColumnHeader();
   buildCollapsibleExplainer();
+  syncFullHistoryIndicator();
 
   // Wrap the legacy render() so the podium (and ranking eligibility split)
   // are (re)computed on every Power Rating re-render, without touching
