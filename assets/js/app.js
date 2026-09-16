@@ -495,34 +495,53 @@ function getDisplayMatches(){
   return effective.concat(pending);
 }
 
-// Human-readable match references (#1, #2, #3...) for pointing at one specific
-// game in the app, in an export, or in conversation -- the internal ids
-// (base_12, sub_1756...) are stable keys but unreadable, and are left alone.
+// Human-readable match references ("2026-08-20-1") for pointing at one
+// specific game in the app, in an export, or in conversation -- the internal
+// ids (base_12, sub_1756...) are stable keys but unreadable, and are left
+// alone.
 //
-// A reference is assigned once and then never changes and never gets reused,
-// so a game can still be cited months later. Assignment is append-only: the
-// existing record was numbered chronologically on first run (so the history
-// reads 1..N oldest-first), and anything added afterwards takes the next free
-// number regardless of when it was played.
+// The reference IS the match's date, plus a "-N" ordinal for its order among
+// games recorded on that same day (there's no time field, only a date). This
+// is what makes insertion non-disruptive: a game played on 20 Aug, added after
+// games on the 19th and 21st already have references, becomes 2026-08-20-1 --
+// a brand new key that sits between them by construction. No existing
+// reference ever has to change or shift to make room for it.
+//
+// A reference is assigned once, at first approval, and never changes or gets
+// reused afterwards -- including if the match's date is later edited (the
+// reference keeps the date it was first given; the Date column, not the
+// reference, is the source of truth for "when"). Deleting a match retires its
+// reference rather than freeing it, so gaps in an ordinal sequence (e.g.
+// jumping from 2026-08-20-1 straight to 2026-08-20-3) are expected and fine.
 //
 // Deliberately deterministic: given the same stored state, every device
-// computes the same assignment, so two clients backfilling at once converge on
-// identical numbers instead of diverging.
-//
-// Pending submissions stay unreferenced until approved -- they are not part of
-// the record yet and may be rejected. Deleting a match retires its number
-// rather than freeing it, which is why gaps are expected and fine.
+// assigns identical references, so two clients backfilling at once converge
+// instead of diverging.
 let matchRefsDirty = false;
 
 function ensureMatchRefs(){
   const unassigned = getAllApprovedMatchesUnfiltered().filter(m => !(m.id in matchRefsState));
   if(unassigned.length === 0) return false;
-  // Oldest-first so the very first run numbers the existing history in a
-  // readable order; after that this only ever runs for genuinely new games,
-  // which simply take the next numbers.
-  unassigned.sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-  let next = Math.max(0, ...Object.values(matchRefsState));
-  unassigned.forEach(m=>{ matchRefsState[m.id] = ++next; });
+  // How many references already exist for each date -- including retired
+  // (deleted) ones, so a freed ordinal is never handed out twice. Seeded from
+  // every already-assigned reference regardless of order; the loop below only
+  // ever appends the next ordinal for a day, never renumbers one already given.
+  const dayCounts = {};
+  Object.values(matchRefsState).forEach(ref=>{
+    const day = ref.slice(0, ref.lastIndexOf('-'));
+    dayCounts[day] = Math.max(dayCounts[day]||0, parseInt(ref.slice(ref.lastIndexOf('-')+1),10));
+  });
+  // Stable, deterministic order for the very first run (which numbers the
+  // whole existing record at once): by date, then by id as a tie-break for
+  // several games on the same day, since there's no time field to order them
+  // by. Two devices running this for the first time against the same stored
+  // matches therefore land on the same day-ordinals.
+  unassigned.sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0))));
+  unassigned.forEach(m=>{
+    const ordinal = (dayCounts[m.date]||0) + 1;
+    dayCounts[m.date] = ordinal;
+    matchRefsState[m.id] = `${m.date}-${ordinal}`;
+  });
   matchRefsDirty = true;
   return true;
 }
@@ -540,6 +559,18 @@ function flushMatchRefs(){
 
 function matchNumberOf(id){
   return matchRefsState[id] || null;
+}
+
+// References sort correctly as plain strings EXCEPT across a 9/10 ordinal
+// boundary on the same day ("2026-08-20-10" < "2026-08-20-9" lexicographically),
+// so comparisons go through this rather than a raw string/number compare.
+function compareMatchRefs(a, b){
+  if(a === b) return 0;
+  if(a === null || a === undefined) return 1;
+  if(b === null || b === undefined) return -1;
+  const aDay = a.slice(0, a.lastIndexOf('-')), bDay = b.slice(0, b.lastIndexOf('-'));
+  if(aDay !== bDay) return aDay < bDay ? -1 : 1;
+  return parseInt(a.slice(a.lastIndexOf('-')+1),10) - parseInt(b.slice(b.lastIndexOf('-')+1),10);
 }
 
 // ===================== RATING ENGINE =====================
@@ -3605,16 +3636,10 @@ function downloadCsv(filename, headers, rows){
 
 function exportMatchesCsv(){
   const headers = ['Match ID','Date','Type','Team A','Team B','Score','Winner','Draw','Team A Rating','Team B Rating','Expected Win % (A/B whichever won)','Actual Win %','Overperformance %','Verified','Status','Submitted By'];
-  // Ordered by permanent reference, so the Match ID column reads 1, 2, 3...
-  // down the sheet (the stored match order is not the date order). Pending
-  // submissions are not referenced yet and sort last.
-  const displayMatches = getDisplayMatches().slice().sort((a,b)=>{
-    const na = matchNumberOf(a.id), nb = matchNumberOf(b.id);
-    if(na === null && nb === null) return 0;
-    if(na === null) return 1;
-    if(nb === null) return -1;
-    return na - nb;
-  });
+  // Ordered by permanent reference (which is chronological by construction --
+  // see compareMatchRefs). Pending submissions have no reference yet and sort last.
+  const displayMatches = getDisplayMatches().slice()
+    .sort((a,b)=> compareMatchRefs(matchNumberOf(a.id), matchNumberOf(b.id)));
   const rows = displayMatches.map(m=>{
     const enrichedIdx = m.isDraw ? -1 : idToIdxGlobalForExport(m.id);
     const enriched = enrichedIdx >= 0 ? MATCHES[enrichedIdx] : null;
@@ -5297,6 +5322,14 @@ async function init(){
   // Must load before recomputeAll() below, which assigns numbers to anything
   // not already referenced -- loading after it would renumber the whole log.
   matchRefsState = await loadMatchRefs();
+  // One-time migration: an earlier version of this feature assigned plain
+  // integers (1, 2, 3...). Those don't carry a date, so they can't be kept --
+  // drop any non-date-shaped entry and let ensureMatchRefs() below assign it
+  // fresh in the current "<date>-<ordinal>" scheme. No-op once every stored
+  // reference is already in that shape.
+  Object.keys(matchRefsState).forEach(id=>{
+    if(!/^\d{4}-\d{2}-\d{2}-\d+$/.test(matchRefsState[id])) delete matchRefsState[id];
+  });
   // Power Rankings opens on the most recently completed month rather than
   // All Time. getAvailableMonths() only needs the raw match state loaded
   // above (not recomputeAll()'s derived PLAYERS/ratings), so this runs
