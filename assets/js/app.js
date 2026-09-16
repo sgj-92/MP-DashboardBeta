@@ -52,7 +52,6 @@ let STARTING_TIER_MAP = {};// name -> tier they started at, if different from cu
 
 let PLAYERS = [];
 let MATCHES = [];
-let MATCH_NUMBERS = {};    // match id -> sequential display number (#1 = oldest)
 let PARTNERSHIPS = [];
 let BEST_PARTNER = {};
 let BOUNDARY_TESTS = [];
@@ -111,6 +110,7 @@ const STORAGE_KEY_GAME_REQUESTS = 'moneypadel_game_requests'; // shared: wishlis
 const STORAGE_KEY_DEV_AREAS = 'moneypadel_dev_areas'; // shared: freeform per-player development notes
 const STORAGE_KEY_CHALLENGES = 'moneypadel_challenges'; // shared: sequential turn-based match challenges (separate from gameRequestsState -- see buildCompleteMatchWithPartner/bridgeChallengeToRequest below for why)
 const STORAGE_KEY_NS_RESULTS = 'moneypadel_north_south_results'; // shared: live results for the North vs South exhibition, keyed by fixture id -- see NORTH_SOUTH_FIXTURES above
+const STORAGE_KEY_MATCH_REFS = 'moneypadel_match_refs'; // shared: permanent match reference numbers, id -> number (assigned once, never reused)
 
 // Sections an admin can hide from non-admin viewers. Admins always see everything.
 const VISIBILITY_DEFAULTS = {
@@ -214,6 +214,26 @@ async function saveNorthSouthResults(results){
     await fsSet(STORAGE_KEY_NS_RESULTS, JSON.stringify(results));
     return true;
   } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save north vs south results failed', e); return false; }
+}
+
+// Permanent match reference numbers: match id -> number. Stored rather than
+// derived, because every derivable ordering in this app can move. The
+// historical block has demonstrably been appended to more than once (its ids
+// carry base_/early_/zgnew_ prefixes), and a match's date can be edited after
+// the fact -- so numbering by position or by date would silently renumber the
+// whole log the next time either happens. A stored number, assigned once and
+// never reused, is the only thing that stays put.
+let matchRefsState = {};
+
+async function loadMatchRefs(){
+  try { const v = await fsGet(STORAGE_KEY_MATCH_REFS); if(v) return JSON.parse(v); } catch(e){ console.error('load match refs failed', e); }
+  return {};
+}
+async function saveMatchRefs(refs){
+  try {
+    await fsSet(STORAGE_KEY_MATCH_REFS, JSON.stringify(refs));
+    return true;
+  } catch(e){ lastStorageError = (e && e.message) ? e.message : String(e); console.error('save match refs failed', e); return false; }
 }
 
 function getNorthSouthFixtureResult(fx){
@@ -475,31 +495,51 @@ function getDisplayMatches(){
   return effective.concat(pending);
 }
 
-// Human-readable match numbers (#1, #2, #3...) for referring to a specific game
-// in the app, in an export, or in conversation -- the internal ids (base_12,
-// sub_1756...) are stable keys but unreadable, and are deliberately left alone.
+// Human-readable match references (#1, #2, #3...) for pointing at one specific
+// game in the app, in an export, or in conversation -- the internal ids
+// (base_12, sub_1756...) are stable keys but unreadable, and are left alone.
 //
-// Numbered oldest-first by date across every approved match, independently of
-// the Data Range setting and of any month/player filter, so one game always
-// carries one number wherever it appears. (BASE_MATCHES is not stored in date
-// order, hence the sort; Array.prototype.sort is stable, so same-day games keep
-// their recorded order.)
+// A reference is assigned once and then never changes and never gets reused,
+// so a game can still be cited months later. Assignment is append-only: the
+// existing record was numbered chronologically on first run (so the history
+// reads 1..N oldest-first), and anything added afterwards takes the next free
+// number regardless of when it was played.
 //
-// Pending submissions are deliberately unnumbered until approved -- they are not
-// part of the record yet and may be rejected. Note that approving a back-dated
-// game inserts it into the sequence and shifts later numbers by one, which is
-// inherent to numbering a match log chronologically.
-function computeMatchNumbers(){
-  const ordered = getAllApprovedMatchesUnfiltered()
-    .slice()
-    .sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-  const numbers = {};
-  ordered.forEach((m,i)=>{ numbers[m.id] = i+1; });
-  return numbers;
+// Deliberately deterministic: given the same stored state, every device
+// computes the same assignment, so two clients backfilling at once converge on
+// identical numbers instead of diverging.
+//
+// Pending submissions stay unreferenced until approved -- they are not part of
+// the record yet and may be rejected. Deleting a match retires its number
+// rather than freeing it, which is why gaps are expected and fine.
+let matchRefsDirty = false;
+
+function ensureMatchRefs(){
+  const unassigned = getAllApprovedMatchesUnfiltered().filter(m => !(m.id in matchRefsState));
+  if(unassigned.length === 0) return false;
+  // Oldest-first so the very first run numbers the existing history in a
+  // readable order; after that this only ever runs for genuinely new games,
+  // which simply take the next numbers.
+  unassigned.sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+  let next = Math.max(0, ...Object.values(matchRefsState));
+  unassigned.forEach(m=>{ matchRefsState[m.id] = ++next; });
+  matchRefsDirty = true;
+  return true;
+}
+
+// Persisting is what makes a reference permanent across devices and across
+// future edits to the historical data, so it is flushed from recomputeAll()
+// rather than from each mutation handler -- that way no future call site can
+// forget to do it. Failures are non-fatal: the in-memory assignment still
+// holds for this session, and the next load reassigns identically.
+function flushMatchRefs(){
+  if(!matchRefsDirty) return;
+  matchRefsDirty = false;
+  saveMatchRefs(matchRefsState);
 }
 
 function matchNumberOf(id){
-  return MATCH_NUMBERS[id] || null;
+  return matchRefsState[id] || null;
 }
 
 // ===================== RATING ENGINE =====================
@@ -862,7 +902,8 @@ function buildDifficultySuggestions(allPlayers, activePlayers){
 
 function recomputeAll(){
   rebuildMapsFromState();
-  MATCH_NUMBERS = computeMatchNumbers();
+  ensureMatchRefs();
+  flushMatchRefs();
   ALL_MATCHES = getEffectiveMatches();
   const ratings = computeElo(ALL_MATCHES, TIER_MAP, STARTING_TIER_MAP);
   MATCHES = enrichMatches(ALL_MATCHES, ratings);
@@ -3405,7 +3446,7 @@ function renderManage(){
   </div>`;
 
   html += `<div class="section-heading">📤 Export data</div>`;
-  html += `<div class="section-sub">Downloads a .csv file to your device — opens straight in Excel, Google Sheets, or Numbers. Matches are exported oldest first, with the same Match ID shown on each game in the Games tab.</div>`;
+  html += `<div class="section-sub">Downloads a .csv file to your device — opens straight in Excel, Google Sheets, or Numbers. Matches are exported in Match ID order, using the same permanent reference shown on each game in the Games tab — a game keeps its number for good, so you can still refer to it in a later export.</div>`;
   html += `<div class="fg-controls">
     <div class="fg-row"><button class="preset-btn" id="exportMatchesBtn" style="width:100%;">Export all matches</button></div>
     <div class="fg-row"><button class="preset-btn" id="exportPlayersBtn" style="width:100%;">Export player stats</button></div>
@@ -3564,9 +3605,9 @@ function downloadCsv(filename, headers, rows){
 
 function exportMatchesCsv(){
   const headers = ['Match ID','Date','Type','Team A','Team B','Score','Winner','Draw','Team A Rating','Team B Rating','Expected Win % (A/B whichever won)','Actual Win %','Overperformance %','Verified','Status','Submitted By'];
-  // Oldest first, so the Match ID column reads 1, 2, 3... down the sheet.
-  // BASE_MATCHES is not stored in date order, so without this the ids would
-  // come out jumbled. Pending submissions have no number yet and sort last.
+  // Ordered by permanent reference, so the Match ID column reads 1, 2, 3...
+  // down the sheet (the stored match order is not the date order). Pending
+  // submissions are not referenced yet and sort last.
   const displayMatches = getDisplayMatches().slice().sort((a,b)=>{
     const na = matchNumberOf(a.id), nb = matchNumberOf(b.id);
     if(na === null && nb === null) return 0;
@@ -5253,6 +5294,9 @@ async function init(){
   devAreasState = await loadDevAreas();
   challengesState = await loadChallenges();
   northSouthResultsState = await loadNorthSouthResults();
+  // Must load before recomputeAll() below, which assigns numbers to anything
+  // not already referenced -- loading after it would renumber the whole log.
+  matchRefsState = await loadMatchRefs();
   // Power Rankings opens on the most recently completed month rather than
   // All Time. getAvailableMonths() only needs the raw match state loaded
   // above (not recomputeAll()'s derived PLAYERS/ratings), so this runs
