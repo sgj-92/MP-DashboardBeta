@@ -1367,6 +1367,15 @@ body { padding-bottom: calc(var(--shell-nav-height) + var(--shell-safe-bottom));
 .mrb-compare-pos{ font-family: var(--font-interface); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .mrb-compare-vs{ font-family: var(--font-interface); font-size: 11px; font-weight: 700; color: var(--text-dim); flex: 0 0 auto; }
 
+/* Sequential match number shown on each game in the Games list -- the same
+   number that appears in the Match ID column of the CSV export, so a specific
+   game can be pointed at from either place. Tabular figures keep the digits
+   aligned down a list of cards. */
+.match-no{
+  font-family: var(--font-interface); font-variant-numeric: tabular-nums;
+  color: var(--gold-dim); font-weight: 700;
+}
+
 /* ==========================================================================
    DATA & RANKINGS -- the app-wide Data Range setting (More > Data & Rankings)
    Styled as a settings list, deliberately unlike the Rankings filter controls:
