@@ -52,6 +52,7 @@ let STARTING_TIER_MAP = {};// name -> tier they started at, if different from cu
 
 let PLAYERS = [];
 let MATCHES = [];
+let MATCH_NUMBERS = {};    // match id -> sequential display number (#1 = oldest)
 let PARTNERSHIPS = [];
 let BEST_PARTNER = {};
 let BOUNDARY_TESTS = [];
@@ -426,11 +427,11 @@ function rebuildMapsFromState(){
   });
 }
 
-// The list used for rating computation: base + approved submissions, edits applied, deletions removed.
-// Every approved match, edits applied, deletions removed. Includes draws -- this is the source
-// of truth for "what exists", used for display. Rating computation uses getEffectiveMatches()
-// below, which filters draws out, since an unfinished game has no defined winner to rate.
-function getAllApprovedMatches(){
+// Every approved match, edits applied, deletions removed, BEFORE the Data Range
+// setting narrows it. Only match numbering uses this: a match's number has to
+// mean the same thing whichever dataset is on screen, so it cannot be derived
+// from a list the setting has already filtered.
+function getAllApprovedMatchesUnfiltered(){
   let all = BASE_MATCHES.concat(extraMatchesState.filter(m=>m.status==='approved'));
   all = all.map(m=>{
     const edit = matchEditsState[m.id];
@@ -442,14 +443,23 @@ function getAllApprovedMatches(){
       type: type!==undefined?type:m.type, note: note!==undefined?note:m.note,
       isDraw: isDraw!==undefined?isDraw:m.isDraw};
   });
-  all = all.filter(m=>!deletedIdsState.includes(m.id));
+  return all.filter(m=>!deletedIdsState.includes(m.id));
+}
+
+// Every approved match, edits applied, deletions removed, narrowed to the
+// selected Data Range. Includes draws -- this is the source of truth for "what
+// exists", used for display. Rating computation uses getEffectiveMatches()
+// below, which filters draws out, since an unfinished game has no defined
+// winner to rate.
+function getAllApprovedMatches(){
+  const all = getAllApprovedMatchesUnfiltered();
   // The one and only place the app-wide Data Range setting is applied. Every
   // calculated statistic in the app -- ratings, monthly ratings, win/loss,
   // league points, form, partnerships, head-to-head, recommendations,
   // call-outs -- is derived from this function (directly, or via
   // getEffectiveMatches/getDisplayMatches), so no screen can ever end up
   // calculating against a different dataset than another.
-  if(dataRange === 'verified') all = all.filter(m => m.verified !== false);
+  if(dataRange === 'verified') return all.filter(m => m.verified !== false);
   return all;
 }
 
@@ -463,6 +473,33 @@ function getDisplayMatches(){
   const effective = getAllApprovedMatches().map(m=>({...m, _status:'approved'}));
   const pending = extraMatchesState.filter(m=>m.status==='pending' && !deletedIdsState.includes(m.id)).map(m=>({...m, _status:'pending'}));
   return effective.concat(pending);
+}
+
+// Human-readable match numbers (#1, #2, #3...) for referring to a specific game
+// in the app, in an export, or in conversation -- the internal ids (base_12,
+// sub_1756...) are stable keys but unreadable, and are deliberately left alone.
+//
+// Numbered oldest-first by date across every approved match, independently of
+// the Data Range setting and of any month/player filter, so one game always
+// carries one number wherever it appears. (BASE_MATCHES is not stored in date
+// order, hence the sort; Array.prototype.sort is stable, so same-day games keep
+// their recorded order.)
+//
+// Pending submissions are deliberately unnumbered until approved -- they are not
+// part of the record yet and may be rejected. Note that approving a back-dated
+// game inserts it into the sequence and shifts later numbers by one, which is
+// inherent to numbering a match log chronologically.
+function computeMatchNumbers(){
+  const ordered = getAllApprovedMatchesUnfiltered()
+    .slice()
+    .sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+  const numbers = {};
+  ordered.forEach((m,i)=>{ numbers[m.id] = i+1; });
+  return numbers;
+}
+
+function matchNumberOf(id){
+  return MATCH_NUMBERS[id] || null;
 }
 
 // ===================== RATING ENGINE =====================
@@ -825,6 +862,7 @@ function buildDifficultySuggestions(allPlayers, activePlayers){
 
 function recomputeAll(){
   rebuildMapsFromState();
+  MATCH_NUMBERS = computeMatchNumbers();
   ALL_MATCHES = getEffectiveMatches();
   const ratings = computeElo(ALL_MATCHES, TIER_MAP, STARTING_TIER_MAP);
   MATCHES = enrichMatches(ALL_MATCHES, ratings);
@@ -3367,7 +3405,7 @@ function renderManage(){
   </div>`;
 
   html += `<div class="section-heading">📤 Export data</div>`;
-  html += `<div class="section-sub">Downloads a .csv file to your device — opens straight in Excel, Google Sheets, or Numbers.</div>`;
+  html += `<div class="section-sub">Downloads a .csv file to your device — opens straight in Excel, Google Sheets, or Numbers. Matches are exported oldest first, with the same Match ID shown on each game in the Games tab.</div>`;
   html += `<div class="fg-controls">
     <div class="fg-row"><button class="preset-btn" id="exportMatchesBtn" style="width:100%;">Export all matches</button></div>
     <div class="fg-row"><button class="preset-btn" id="exportPlayersBtn" style="width:100%;">Export player stats</button></div>
@@ -3525,12 +3563,22 @@ function downloadCsv(filename, headers, rows){
 }
 
 function exportMatchesCsv(){
-  const headers = ['Date','Type','Team A','Team B','Score','Winner','Draw','Team A Rating','Team B Rating','Expected Win % (A/B whichever won)','Actual Win %','Overperformance %','Verified','Status','Submitted By'];
-  const displayMatches = getDisplayMatches();
+  const headers = ['Match ID','Date','Type','Team A','Team B','Score','Winner','Draw','Team A Rating','Team B Rating','Expected Win % (A/B whichever won)','Actual Win %','Overperformance %','Verified','Status','Submitted By'];
+  // Oldest first, so the Match ID column reads 1, 2, 3... down the sheet.
+  // BASE_MATCHES is not stored in date order, so without this the ids would
+  // come out jumbled. Pending submissions have no number yet and sort last.
+  const displayMatches = getDisplayMatches().slice().sort((a,b)=>{
+    const na = matchNumberOf(a.id), nb = matchNumberOf(b.id);
+    if(na === null && nb === null) return 0;
+    if(na === null) return 1;
+    if(nb === null) return -1;
+    return na - nb;
+  });
   const rows = displayMatches.map(m=>{
     const enrichedIdx = m.isDraw ? -1 : idToIdxGlobalForExport(m.id);
     const enriched = enrichedIdx >= 0 ? MATCHES[enrichedIdx] : null;
     return [
+      matchNumberOf(m.id) || '',
       m.date, m.type || 'doubles',
       m.winners.join(' & '), m.losers.join(' & '),
       m.sets.map(s=>s.join('-')).join(', '),
@@ -4820,7 +4868,9 @@ Player C &amp; Player D"></textarea>
     }
     const isBase = m.id.startsWith('base_');
     const edit = matchEditsState[m.id];
+    const matchNo = matchNumberOf(m.id);
     let metaLine = isBase ? 'Historical record' : `Submitted by ${m.submittedBy || 'unknown'}`;
+    if(matchNo) metaLine = `<span class="match-no">Match #${matchNo}</span> · ${metaLine}`;
     if(edit) metaLine += ` · edited by ${edit.editedBy} (${fmtRelative(edit.editedAt)})`;
     const isArmed = armedDeleteId === m.id;
     const unverifiedTag = m.verified === false ? `<span class="strength-pill" style="color:#e8a5a1; border-color:var(--red); margin-left:6px;">Pre-June · single-sourced</span>` : '';
